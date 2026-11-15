@@ -2,7 +2,15 @@
  * PostgreSQL support (`ekto/postgres`).
  */
 
-import { PostgresDialect, sql } from "kysely";
+import {
+  CompiledQuery,
+  type DatabaseConnection,
+  type Dialect,
+  PostgresDialect,
+  PostgresDriver,
+  type PostgresPool,
+  sql,
+} from "kysely";
 import pg from "pg";
 import type {
   Adapter,
@@ -216,19 +224,54 @@ export function utcTimestamps(types: TypeParsers): TypeParsers {
 }
 
 /**
- * The node-postgres pool of a Repo (Postgrex's connection options):
- * `url`, or `hostname` (or `socketDir`), `port`, `database`, `username`
- * and `password`, and `ssl`. `timestamp` columns read as UTC
+ * One node-postgres client, in the shape of the pool Kysely's
+ * `PostgresDriver` takes: the Repo's pool holds a driver per connection.
+ * A client that failed (the server closed it, or Kysely discarded it) is
+ * replaced by a new one on its next checkout, as DBConnection reconnects.
+ */
+function clientPool(config: pg.ClientConfig): PostgresPool {
+  let client: pg.Client | undefined;
+  let broken = false;
+  const close = async () => {
+    const closing = client;
+    client = undefined;
+    broken = false;
+    await closing?.end().catch(() => {});
+  };
+  return {
+    Client: pg.Client,
+    options: config,
+    async connect() {
+      if (broken) await close();
+      if (client === undefined) {
+        const created = new pg.Client(config);
+        const fail = () => {
+          if (client === created) broken = true;
+        };
+        // Without a listener, an error on an idle client crashes the process.
+        created.on("error", fail);
+        created.on("end", fail);
+        await created.connect();
+        client = created;
+      }
+      return Object.assign(client, {
+        release(destroy?: boolean) {
+          if (destroy) broken = true;
+        },
+      }) as unknown as pg.PoolClient;
+    },
+    end: close,
+  };
+}
+
+/**
+ * The connections of a Repo with node-postgres (Postgrex's connection
+ * options): `url`, or `hostname` (or `socketDir`), `port`, `database`,
+ * `username` and `password`, and `ssl`. `timestamp` columns read as UTC
  * ({@link utcTimestamps}).
  */
-function connect(
-  options: ConnectionOptions,
-  poolSize: number,
-): PostgresDialect {
-  const config: pg.PoolConfig = {
-    max: poolSize,
-    types: utcTimestamps(pg.types),
-  };
+function connect(options: ConnectionOptions): Dialect {
+  const config: pg.ClientConfig = { types: utcTimestamps(pg.types) };
   if (options.url !== undefined) config.connectionString = options.url;
   const host = options.hostname ?? options.socketDir;
   if (host !== undefined) config.host = host;
@@ -237,7 +280,20 @@ function connect(
   if (options.username !== undefined) config.user = options.username;
   if (options.password !== undefined) config.password = options.password;
   if (options.ssl !== undefined) config.ssl = options.ssl;
-  return new PostgresDialect({ pool: new pg.Pool(config) });
+  // The dialect's compiler, adapter and introspector, with one client per
+  // driver.
+  const dialect = new PostgresDialect({ pool: clientPool(config) });
+  return {
+    createDriver: () => new PostgresDriver({ pool: clientPool(config) }),
+    createQueryCompiler: () => dialect.createQueryCompiler(),
+    createAdapter: () => dialect.createAdapter(),
+    createIntrospector: (db) => dialect.createIntrospector(db),
+  };
+}
+
+/** Postgrex's ping: a round trip on an idle connection. */
+async function ping(connection: DatabaseConnection): Promise<void> {
+  await connection.executeQuery(CompiledQuery.raw("SELECT 1"));
 }
 
 /**
@@ -258,6 +314,7 @@ export function postgres(): Adapter {
     // The pool size of the Repo configuration Phoenix generates.
     defaultPoolSize: 10,
     connect,
+    ping,
     load: loadValue,
     dump: dumpValue,
     toConstraints,

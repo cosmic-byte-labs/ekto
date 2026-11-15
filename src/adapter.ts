@@ -13,6 +13,7 @@ import type { ConnectionOptions as TlsOptions } from "node:tls";
 import {
   CompiledQuery,
   type ControlledTransaction,
+  type DatabaseConnection,
   type Dialect,
   isCompiledQuery,
   type Kysely,
@@ -76,10 +77,17 @@ export interface Adapter {
   readonly defaultPoolSize: number;
   /**
    * The Kysely dialect connecting with `options` (Ecto's
-   * `Ecto.Adapter.init/1`). The Repo's pool hands out at most `poolSize`
-   * connections at once, so the dialect needs to open no more than that.
+   * `Ecto.Adapter.init/1`). Each driver it creates holds one connection
+   * (a DBConnection connection); the Repo's pool creates up to `poolSize`
+   * of them.
    */
   connect(options: ConnectionOptions, poolSize: number): Dialect;
+  /**
+   * Checks an idle connection (DBConnection's `ping/1`); when it throws,
+   * the pool closes the connection. Without it, idle connections are left
+   * as they are, as Exqlite's ping does.
+   */
+  ping?(connection: DatabaseConnection): Promise<void>;
   /**
    * Converts a value the driver returned into what the type loads (Ecto's
    * adapter loaders), e.g. a Postgres `int8` string into a number. Never

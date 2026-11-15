@@ -123,3 +123,52 @@ describe("utcTimestamps", () => {
     }
   });
 });
+
+describe("the Repo's connections", { skip: skipWithoutPg }, () => {
+  const pid = async (repo: ReturnType<typeof connectPg>) =>
+    (
+      await sql<{
+        pid: number;
+      }>`SELECT pg_backend_pid() AS pid`.execute(repo.kysely)
+    ).rows[0]?.pid;
+
+  test("a connection the server closed is replaced", async () => {
+    const repo = connectPg({ poolSize: 1, idleInterval: 60_000 });
+    const other = connectPg({ poolSize: 1 });
+    try {
+      const before = await pid(repo);
+      await sql`SELECT pg_terminate_backend(${before})`.execute(other.kysely);
+      // The client sees the server close it while idle; it must not crash
+      // the process, and the next checkout reconnects.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const after = await pid(repo);
+      assert.notEqual(after, before);
+    } finally {
+      await repo.stop();
+      await other.stop();
+    }
+  });
+
+  test("idle connections are pinged, and stay usable", async () => {
+    const repo = connectPg({ poolSize: 1, idleInterval: 10 });
+    try {
+      const before = await pid(repo);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(await pid(repo), before, "the same connection");
+    } finally {
+      await repo.stop();
+    }
+  });
+
+  test("connections past their lifetime are replaced", async () => {
+    const repo = connectPg({ poolSize: 1, maxLifetime: [10, 10] });
+    try {
+      const before = await pid(repo);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await pid(repo); // checked in past its lifetime, so closed
+      assert.notEqual(await pid(repo), before);
+    } finally {
+      await repo.stop();
+    }
+  });
+});

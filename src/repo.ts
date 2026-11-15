@@ -71,7 +71,7 @@ import {
 } from "./errors.ts";
 import type { DriverTypes, KyselyTable } from "./kysely.ts";
 import { Multi, type MultiResult, type Operation } from "./multi.ts";
-import { ConnectionPool, pooledDialect } from "./pool.ts";
+import { pooledDialect } from "./pool.ts";
 import {
   assocQuery,
   type PreloadContext,
@@ -315,6 +315,22 @@ export interface RepoConfig extends ConnectionOptions {
   readonly queueTarget?: number;
   /** The window `queueTarget` is checked in, in ms (Ecto's `:queue_interval`, 2000). */
   readonly queueInterval?: number;
+  /**
+   * How often idle connections are pinged, in ms (Ecto's `:idle_interval`,
+   * 1000): a connection idle for `idleInterval` to twice that is pinged,
+   * and closed if the ping fails.
+   */
+  readonly idleInterval?: number;
+  /** How many connections are pinged per `idleInterval` (`:idle_limit`), all by default. */
+  readonly idleLimit?: number;
+  /**
+   * How long a connection lives, in ms, as `[min, max]` (Ecto's
+   * `:max_lifetime`, none): each connection closes after a time between
+   * the two, spread so they do not all reconnect at once, e.g.
+   * `[480_000, 540_000]` for 8 to 9 minutes. A connection in use closes
+   * when it is checked in.
+   */
+  readonly maxLifetime?: readonly [number, number];
   /** Kysely plugins for `repo.kysely`, e.g. `ParseJSONResultsPlugin`. */
   readonly plugins?: readonly KyselyPlugin[];
   /** Called after every query ekto runs, e.g. for logging. */
@@ -326,6 +342,8 @@ export type ResolvedRepoConfig = RepoConfig & {
   readonly poolSize: number;
   readonly queueTarget: number;
   readonly queueInterval: number;
+  readonly idleInterval: number;
+  readonly idleLimit: number;
 };
 
 // biome-ignore lint/suspicious/noExplicitAny: a Repo over any database type
@@ -654,17 +672,24 @@ export function createRepo<DB>(options: RepoConfig): Repo<DB> {
     poolSize: options.poolSize ?? options.adapter.defaultPoolSize,
     queueTarget: options.queueTarget ?? 50,
     queueInterval: options.queueInterval ?? 2000,
+    idleInterval: options.idleInterval ?? 1000,
+    idleLimit:
+      options.idleLimit ?? options.poolSize ?? options.adapter.defaultPoolSize,
   });
-  const pool = new ConnectionPool({
-    size: config.poolSize,
-    queueTarget: config.queueTarget,
-    queueInterval: config.queueInterval,
-  });
+  const { dialect, pool } = pooledDialect(
+    config.adapter.connect(config, config.poolSize),
+    {
+      size: config.poolSize,
+      queueTarget: config.queueTarget,
+      queueInterval: config.queueInterval,
+      idleInterval: config.idleInterval,
+      idleLimit: config.idleLimit,
+      ...(config.maxLifetime && { maxLifetime: config.maxLifetime }),
+    },
+    config.adapter.ping?.bind(config.adapter),
+  );
   const db = new Kysely<DB>({
-    dialect: pooledDialect(
-      config.adapter.connect(config, config.poolSize),
-      pool,
-    ),
+    dialect,
     ...(config.plugins && { plugins: [...config.plugins] }),
   });
   const executor = new Executor(db, {
@@ -673,7 +698,7 @@ export function createRepo<DB>(options: RepoConfig): Repo<DB> {
     stop: async () => {
       // Kysely destroys no driver it never connected, so the pool is
       // stopped here too.
-      pool.stop();
+      await pool.stop();
       await db.destroy();
     },
   });

@@ -10,7 +10,6 @@ import type {
   ConstraintViolation,
 } from "../adapter.ts";
 import type { DriverValue, KyselyTables } from "../kysely.ts";
-import { connectionsDriver } from "../pool.ts";
 import type { AnySchema } from "../schema.ts";
 import { quoteIdentifierAnsi, type SqlSyntax } from "../sql.ts";
 import type { PrimitiveType } from "../type.ts";
@@ -229,10 +228,8 @@ function connect(options: ConnectionOptions, poolSize: number): Dialect {
   };
   const dialect = new SqliteDialect({ database: open });
   return {
-    // Kysely's SqliteDriver shares one connection between all callers;
-    // the pool gives each caller its own.
-    createDriver: () =>
-      connectionsDriver(() => new SqliteDriver({ database: open })),
+    // One better-sqlite3 database per driver, so per pooled connection.
+    createDriver: () => new SqliteDriver({ database: open }),
     createQueryCompiler: () => dialect.createQueryCompiler(),
     createAdapter: () => dialect.createAdapter(),
     createIntrospector: (db) => dialect.createIntrospector(db),

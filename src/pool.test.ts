@@ -6,75 +6,183 @@ import { after, describe, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { sql } from "kysely";
 import { ConnectionError } from "./errors.ts";
-import { ConnectionPool } from "./pool.ts";
+import { ConnectionPool, type PoolOptions } from "./pool.ts";
 import { createRepo } from "./repo.ts";
 import { sqlite } from "./sqlite/index.ts";
 
+interface Fake {
+  readonly id: number;
+  closed: boolean;
+  pings: number;
+}
+
+/** A pool of fake connections, with the ones it opened. */
+function fakePool(
+  options: Omit<PoolOptions, "size"> & { size?: number },
+  ping: (connection: Fake) => Promise<void> = async () => {},
+) {
+  const opened: Fake[] = [];
+  const pool = new ConnectionPool<Fake>(
+    { size: 1, ...options },
+    {
+      async open() {
+        const connection = { id: opened.length + 1, closed: false, pings: 0 };
+        opened.push(connection);
+        return connection;
+      },
+      async close(connection) {
+        connection.closed = true;
+      },
+      async ping(connection) {
+        connection.pings++;
+        await ping(connection);
+      },
+    },
+  );
+  return { pool, opened };
+}
+
 describe("ConnectionPool", () => {
-  test("hands out at most size connections, then queues in order", async () => {
-    const pool = new ConnectionPool({ size: 2 });
-    await pool.checkout();
-    await pool.checkout();
+  test("opens at most size connections, then queues in order", async () => {
+    const { pool, opened } = fakePool({ size: 2 });
+    const a = await pool.checkout();
+    const b = await pool.checkout();
     const order: number[] = [];
-    const first = pool.checkout().then(() => order.push(1));
-    const second = pool.checkout().then(() => order.push(2));
+    const first = pool.checkout().then((c) => order.push(c.id));
+    const second = pool.checkout().then((c) => order.push(c.id));
     await sleep(5);
     assert.deepEqual(order, []);
-    pool.checkin();
+    pool.checkin(a);
     await first;
-    assert.deepEqual(order, [1]);
-    pool.checkin();
+    pool.checkin(b);
     await second;
     assert.deepEqual(order, [1, 2]);
-    pool.checkin();
-    pool.checkin();
-    await pool.checkout();
-    await pool.checkout();
-    pool.stop();
+    assert.equal(opened.length, 2);
+    await pool.stop();
+  });
+
+  test("reuses the connection idle the longest", async () => {
+    const { pool } = fakePool({ size: 2 });
+    const a = await pool.checkout();
+    const b = await pool.checkout();
+    pool.checkin(b);
+    pool.checkin(a);
+    assert.equal((await pool.checkout()).id, b.id);
+    await pool.stop();
   });
 
   test("drops requests that wait too long when the queue is slow", async () => {
-    const pool = new ConnectionPool({
-      size: 1,
-      queueTarget: 5,
-      queueInterval: 20,
-    });
+    const { pool } = fakePool({ queueTarget: 5, queueInterval: 20 });
     await pool.checkout();
-    const waiting = pool.checkout();
-    await assert.rejects(waiting, (error: unknown) => {
+    await assert.rejects(pool.checkout(), (error: unknown) => {
       assert.ok(error instanceof ConnectionError);
       assert.equal(error.reason, "queue_timeout");
       assert.match(error.message, /dropped from queue after \d+ms/);
       return true;
     });
-    pool.stop();
+    await pool.stop();
   });
 
   test("a queued request can be aborted", async () => {
-    const pool = new ConnectionPool({ size: 1 });
-    await pool.checkout();
+    const { pool } = fakePool({});
+    const a = await pool.checkout();
     const controller = new AbortController();
     const waiting = pool.checkout(controller.signal);
     controller.abort(new Error("gave up"));
     await assert.rejects(waiting, /gave up/);
     // The aborted request no longer holds a place in the queue.
-    pool.checkin();
-    await pool.checkout();
-    pool.stop();
+    pool.checkin(a);
+    assert.equal(await pool.checkout(), a);
+    await pool.stop();
+  });
+
+  test("a closed connection's place goes to the next caller", async () => {
+    const { pool, opened } = fakePool({});
+    const a = await pool.checkout();
+    const waiting = pool.checkout();
+    pool.disconnect(a);
+    const b = await waiting;
+    assert.equal(b.id, 2);
+    assert.equal(opened.length, 2);
+    await pool.stop();
+  });
+
+  test("idle connections are pinged, and closed when the ping fails", async () => {
+    let fail = false;
+    const { pool, opened } = fakePool(
+      { size: 2, idleInterval: 10 },
+      async () => {
+        if (fail) throw new Error("gone");
+      },
+    );
+    const a = await pool.checkout();
+    const b = await pool.checkout();
+    pool.checkin(a);
+    pool.checkin(b);
+    await sleep(40);
+    assert.ok(a.pings > 0 && b.pings > 0, "both pinged");
+    assert.equal(a.closed, false);
+    fail = true;
+    await sleep(40);
+    assert.ok(a.closed && b.closed);
+    // The pool opens new connections in their place.
+    assert.equal((await pool.checkout()).id, 3);
+    assert.equal(opened.length, 3);
+    await pool.stop();
+  });
+
+  test("idleLimit bounds the pings per interval", async () => {
+    const { pool } = fakePool({ size: 2, idleInterval: 10, idleLimit: 1 });
+    const a = await pool.checkout();
+    const b = await pool.checkout();
+    pool.checkin(a);
+    pool.checkin(b);
+    await sleep(25);
+    assert.ok(a.pings + b.pings <= 2);
+    await pool.stop();
+  });
+
+  test("connections past their lifetime close on checkin or when idle", async () => {
+    const { pool } = fakePool({ maxLifetime: [10, 10], idleInterval: 10 });
+    const a = await pool.checkout();
+    await sleep(15);
+    pool.checkin(a);
+    assert.equal(a.closed, true, "closed on checkin");
+    const b = await pool.checkout();
+    assert.equal(b.id, 2);
+    pool.checkin(b);
+    await sleep(40);
+    assert.equal(b.closed, true, "closed while idle");
+    await pool.stop();
   });
 
   test("stopping fails the queued requests and later checkouts", async () => {
-    const pool = new ConnectionPool({ size: 1 });
-    await pool.checkout();
+    const { pool } = fakePool({});
+    const a = await pool.checkout();
     const waiting = pool.checkout();
-    pool.stop();
+    await pool.stop();
     await assert.rejects(waiting, ConnectionError);
     await assert.rejects(pool.checkout(), /the pool is stopped/);
+    pool.checkin(a);
+    assert.equal(a.closed, true, "closed when checked in after stop");
   });
 
-  test("the size is a positive integer", () => {
-    assert.throws(() => new ConnectionPool({ size: 0 }), TypeError);
-    assert.throws(() => new ConnectionPool({ size: 1.5 }), TypeError);
+  test("stopping closes the idle connections", async () => {
+    const { pool } = fakePool({});
+    const a = await pool.checkout();
+    pool.checkin(a);
+    await pool.stop();
+    assert.equal(a.closed, true);
+  });
+
+  test("validates its options", () => {
+    assert.throws(() => fakePool({ size: 0 }), /poolSize/);
+    assert.throws(() => fakePool({ size: 1.5 }), /poolSize/);
+    assert.throws(() => fakePool({ idleInterval: -1 }), /idleInterval/);
+    assert.throws(
+      () => fakePool({ maxLifetime: [10, 5] }),
+      /invalid value for maxLifetime/,
+    );
   });
 });
 
@@ -87,6 +195,9 @@ describe("a Repo's pool", () => {
     assert.equal(repo.config.poolSize, 1);
     assert.equal(repo.config.queueTarget, 50);
     assert.equal(repo.config.queueInterval, 2000);
+    assert.equal(repo.config.idleInterval, 1000);
+    assert.equal(repo.config.idleLimit, 1);
+    assert.equal(repo.config.maxLifetime, undefined);
     await repo.stop();
   });
 
