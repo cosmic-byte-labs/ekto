@@ -4,10 +4,12 @@
  * @module ekto/postgres
  */
 
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   CompiledQuery,
   type DatabaseConnection,
   type Dialect,
+  type Kysely,
   PostgresDialect,
   PostgresDriver,
   type PostgresPool,
@@ -19,6 +21,7 @@ import type {
   AdapterMeta,
   ConnectionOptions,
   ConstraintViolation,
+  MigrationLockOptions,
 } from "../adapter.ts";
 import type { ConstraintType } from "../changeset.ts";
 import type { DriverValue, KyselyTables } from "../kysely.ts";
@@ -328,16 +331,15 @@ export function postgres(): Adapter {
 }
 
 /**
- * Ecto's `:table_lock` strategy: a transaction on its own connection locks
- * the migrations table in SHARE UPDATE EXCLUSIVE mode, which conflicts with
- * itself but not with the inserts and deletes of the migration running on
- * another connection. So the pool needs two connections, and a pool of one
- * raises, as Ecto's does.
+ * Ecto's lock for migrations, on a connection of its own while the
+ * migration runs on another, so the pool needs two connections and a pool
+ * of one raises, as Ecto's does.
  */
 async function lockForMigrations<T>(
   { kysely, poolSize }: AdapterMeta,
   table: string,
   fn: () => Promise<T>,
+  options: MigrationLockOptions,
 ): Promise<T> {
   if (poolSize === 1)
     throw new MigrationError(
@@ -357,6 +359,22 @@ pool size via the Repo's configuration:
 
     createRepo({ ..., poolSize: 2 }) // at least`,
     );
+  return options.strategy === "pgAdvisoryLock"
+    ? advisoryLock(kysely, table, fn, options)
+    : tableLock(kysely, table, fn);
+}
+
+/**
+ * Ecto's `:table_lock`: a transaction locks the migrations table in SHARE
+ * UPDATE EXCLUSIVE mode, which conflicts with itself but not with the
+ * inserts and deletes of the migration.
+ */
+async function tableLock<T>(
+  // biome-ignore lint/suspicious/noExplicitAny: any database
+  kysely: Kysely<any>,
+  table: string,
+  fn: () => Promise<T>,
+): Promise<T> {
   const trx = await kysely.startTransaction().execute();
   try {
     await sql`LOCK TABLE ${sql.table(table)} IN SHARE UPDATE EXCLUSIVE MODE`.execute(
@@ -369,6 +387,61 @@ pool size via the Repo's configuration:
     await trx.rollback().execute();
     throw error;
   }
+}
+
+/**
+ * Ecto's `:pg_advisory_lock`: `pg_try_advisory_lock` on a connection held
+ * while the migration runs, retried every `advisoryLockRetryIntervalMs`
+ * until `advisoryLockMaxTries` retries fail. No transaction stays open, so
+ * `CREATE INDEX CONCURRENTLY` does not wait for the lock. The key stands
+ * for the migrations table, as Ecto's (a hash of the prefix and the Repo).
+ */
+async function advisoryLock<T>(
+  // biome-ignore lint/suspicious/noExplicitAny: any database
+  kysely: Kysely<any>,
+  table: string,
+  fn: () => Promise<T>,
+  options: MigrationLockOptions,
+): Promise<T> {
+  const key = advisoryLockKey(table);
+  for (let tries = 0; ; tries++) {
+    const result = await kysely.connection().execute(async (connection) => {
+      const { rows } = await sql<{
+        locked: boolean;
+      }>`SELECT pg_try_advisory_lock(${key}::bigint) AS locked`.execute(
+        connection,
+      );
+      if (rows[0]?.locked !== true) return undefined;
+      try {
+        return { value: await fn() };
+      } finally {
+        const { rows } = await sql<{
+          unlocked: boolean;
+        }>`SELECT pg_advisory_unlock(${key}::bigint) AS unlocked`.execute(
+          connection,
+        );
+        if (rows[0]?.unlocked !== true)
+          // biome-ignore lint/correctness/noUnsafeFinally: as Ecto's `after`
+          throw new MigrationError("failed to release advisory lock");
+      }
+    });
+    if (result !== undefined) return result.value;
+    const { advisoryLockMaxTries: max, advisoryLockRetryIntervalMs: interval } =
+      options;
+    if (max <= tries)
+      throw new MigrationError(
+        `failed to obtain advisory lock. Tried ${max} times waiting ${interval}ms between tries`,
+      );
+    await sleep(interval);
+  }
+}
+
+/** A 32-bit FNV-1a hash of the migrations table, as the advisory lock's key. */
+function advisoryLockKey(table: string): number {
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(`ekto:${table}`))
+    hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+  return hash;
 }
 
 export { postgresDdl };

@@ -69,6 +69,26 @@ export interface AdapterMeta {
   readonly poolSize: number;
 }
 
+/**
+ * How an adapter locks for migrations (Ecto's `:migration_lock` and the
+ * `:migration_advisory_lock_*` Repo options).
+ */
+export interface MigrationLockOptions {
+  /**
+   * `tableLock` (the default) locks the migrations table in a transaction;
+   * `pgAdvisoryLock` (PostgreSQL) takes a session advisory lock, with no
+   * transaction open, so migrations can create indexes concurrently.
+   */
+  readonly strategy: MigrationLockStrategy;
+  /** How long to wait before trying again for a held advisory lock. */
+  readonly advisoryLockRetryIntervalMs: number;
+  /** How many times to try again for a held advisory lock before failing. */
+  readonly advisoryLockMaxTries: number;
+}
+
+/** Ecto's `:table_lock` and `:pg_advisory_lock`. */
+export type MigrationLockStrategy = "tableLock" | "pgAdvisoryLock";
+
 /** A dialect: connections, SQL syntax and the driver's value representation. */
 export interface Adapter {
   readonly name: string;
@@ -118,13 +138,14 @@ export interface Adapter {
   /**
    * Runs `fn` holding the lock that keeps two migrators from running the
    * same migration (Ecto's `lock_for_migrations/3`); `table` is the
-   * migrations table. `fn` runs its queries on `meta.kysely`, not in the
-   * lock's transaction. Adapters without it run migrations unlocked.
+   * migrations table. `fn` runs its queries on `meta.kysely`, not on the
+   * lock's connection. Adapters without it run migrations unlocked.
    */
   lockForMigrations?<T>(
     meta: AdapterMeta,
     table: string,
     fn: () => Promise<T>,
+    options: MigrationLockOptions,
   ): Promise<T>;
   /**
    * The tables of the database (its current schema), with their columns,

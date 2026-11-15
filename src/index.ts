@@ -10,6 +10,8 @@ export type {
   ColumnDescription,
   ConnectionOptions,
   ConstraintViolation,
+  MigrationLockOptions,
+  MigrationLockStrategy,
   QueryEvent,
   QueryResult,
   TableDescription,

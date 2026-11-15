@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import type { MigrationLockStrategy } from "../adapter.ts";
 import { createRepo, type RepoConfig } from "../repo.ts";
 import {
   generate,
@@ -35,8 +36,15 @@ export interface EktoConfig {
   readonly migrationsFolder?: string;
   /** The table of executed versions, `schema_migrations` by default. */
   readonly migrationSource?: string;
-  /** Whether to lock while migrating, `true` by default. */
-  readonly migrationLock?: boolean;
+  /**
+   * Whether and how to lock while migrating, `true` (a table lock) by
+   * default, or `"pgAdvisoryLock"`; see `MigratorOptions.migrationLock`.
+   */
+  readonly migrationLock?: boolean | MigrationLockStrategy;
+  /** With `"pgAdvisoryLock"`, the wait before trying again, 5000 ms by default. */
+  readonly migrationAdvisoryLockRetryIntervalMs?: number;
+  /** With `"pgAdvisoryLock"`, how many times to try again, `Infinity` by default. */
+  readonly migrationAdvisoryLockMaxTries?: number;
   /** Where `gen.schema` writes schemas, `src/schemas` by default. */
   readonly schemasFolder?: string;
   /** The migrations `gen.schema` writes: `ekto` (the default), `kysely` or `none`. */
@@ -253,6 +261,13 @@ export async function main(
         migrationSource: config.migrationSource,
       }),
       migrationLock: values["no-lock"] ? false : config.migrationLock,
+      ...(config.migrationAdvisoryLockRetryIntervalMs !== undefined && {
+        migrationAdvisoryLockRetryIntervalMs:
+          config.migrationAdvisoryLockRetryIntervalMs,
+      }),
+      ...(config.migrationAdvisoryLockMaxTries !== undefined && {
+        migrationAdvisoryLockMaxTries: config.migrationAdvisoryLockMaxTries,
+      }),
     });
     if (command === "status") {
       // As `mix ecto.migrations` prints it.

@@ -8,7 +8,7 @@ import { readdir } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { type Kysely, sql } from "kysely";
-import type { Adapter } from "../adapter.ts";
+import type { Adapter, MigrationLockStrategy } from "../adapter.ts";
 import type { Repo } from "../repo.ts";
 import {
   type Command,
@@ -34,12 +34,29 @@ export interface MigratorOptions {
   /** The table of executed versions, `schema_migrations` by default (Ecto's `:migration_source`). */
   readonly migrationSource?: string;
   /**
-   * Whether to lock while migrating so that two migrators never run the
-   * same migration, `true` by default (Ecto's `:migration_lock`). On
-   * PostgreSQL, the lock holds a connection, so the Repo's pool needs at
-   * least two, and migrations fail on a pool of one.
+   * Whether and how to lock while migrating so that two migrators never
+   * run the same migration (Ecto's `:migration_lock`): `true` (the
+   * default) is `"tableLock"`, and `"pgAdvisoryLock"` takes a PostgreSQL
+   * advisory lock instead, which lets migrations create indexes
+   * concurrently without `disableMigrationLock`. Some Postgres-compatible
+   * systems do not support session-level locks well: PgBouncer in a pool
+   * mode other than session, or CockroachDB. On PostgreSQL, the lock holds
+   * a connection, so the Repo's pool needs at least two, and migrations
+   * fail on a pool of one.
    */
-  readonly migrationLock?: boolean;
+  readonly migrationLock?: boolean | MigrationLockStrategy;
+  /**
+   * With `"pgAdvisoryLock"`, how long to wait before trying again when
+   * another migrator holds the lock, 5000 by default (Ecto's
+   * `:migration_advisory_lock_retry_interval_ms`).
+   */
+  readonly migrationAdvisoryLockRetryIntervalMs?: number;
+  /**
+   * With `"pgAdvisoryLock"`, how many times to try again before the
+   * migration fails, `Infinity` by default (Ecto's
+   * `:migration_advisory_lock_max_tries`).
+   */
+  readonly migrationAdvisoryLockMaxTries?: number;
 }
 
 /** A migration: its version and name. */
@@ -171,6 +188,12 @@ export function createMigrator(options: MigratorOptions): EktoMigrator {
   const { adapter } = repo;
   const source = options.migrationSource ?? "schema_migrations";
   const lock = options.migrationLock ?? true;
+  const lockOptions = {
+    strategy: lock === "pgAdvisoryLock" ? lock : "tableLock",
+    advisoryLockRetryIntervalMs:
+      options.migrationAdvisoryLockRetryIntervalMs ?? 5000,
+    advisoryLockMaxTries: options.migrationAdvisoryLockMaxTries ?? Infinity,
+  } as const;
   const load = async (): Promise<Entry[]> =>
     entries(
       typeof options.migrations === "function"
@@ -203,13 +226,14 @@ export function createMigrator(options: MigratorOptions): EktoMigrator {
     entry: Entry,
     fn: (executed: Set<number>) => Promise<T>,
   ): Promise<T> =>
-    lock &&
+    lock !== false &&
     !entry.migration.disableMigrationLock &&
     adapter.lockForMigrations !== undefined
       ? adapter.lockForMigrations(
           { kysely: repo.kysely, poolSize: repo.config.poolSize },
           source,
           async () => fn(await versions()),
+          lockOptions,
         )
       : fn(await versions());
 
@@ -222,6 +246,7 @@ export function createMigrator(options: MigratorOptions): EktoMigrator {
           "it defines up but no down, so it cannot be rolled back",
         );
       else commands = entry.migration.down();
+      warnConcurrentIndexes(entry, commands);
       // biome-ignore lint/suspicious/noExplicitAny: any database
       const body = async (q: Kysely<any>) => {
         await runCommands(q, adapter, commands);
@@ -240,6 +265,40 @@ export function createMigrator(options: MigratorOptions): EktoMigrator {
       if (error instanceof Error)
         error.message = `migration ${entry.key} failed: ${error.message}`;
       throw error;
+    }
+  };
+
+  /**
+   * Ecto's runner warnings for indexes created or dropped concurrently
+   * without disabling the DDL transaction or the migration lock.
+   */
+  const warnConcurrentIndexes = (entry: Entry, commands: Command[]) => {
+    const { disableDdlTransaction, disableMigrationLock } = entry.migration;
+    for (const command of commands) {
+      if (
+        command.command === "executeReversible" ||
+        !("object" in command) ||
+        command.object.kind !== "index" ||
+        !command.object.concurrently
+      )
+        continue;
+      const index = command.object;
+      const set = `Migration ${entry.key} has set index \`${index.name}\` on table \`${index.table}\` to concurrently but did not disable`;
+      if (!disableDdlTransaction)
+        process.emitWarning(
+          `${set} ddl transaction. Please set:\n\n    migration({ disableDdlTransaction: true, ... })\n`,
+        );
+      if (!disableMigrationLock) {
+        if (adapter.name !== "postgres")
+          process.emitWarning(
+            `${set} migration lock. Please set:\n\n    migration({ disableMigrationLock: true, ... })\n`,
+          );
+        else if (lock !== "pgAdvisoryLock")
+          process.emitWarning(
+            `${set} migration lock. Please set:\n\n    migration({ disableMigrationLock: true, ... })\n\n` +
+              `Alternatively, consider using advisory locks during migrations in the migrator's configuration:\n\n    migrationLock: "pgAdvisoryLock"\n`,
+          );
+      }
     }
   };
 

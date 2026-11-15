@@ -2,14 +2,15 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, test } from "node:test";
+import { after, before, describe, type TestContext, test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { type Kysely, sql } from "kysely";
-import type { Adapter } from "../adapter.ts";
+import type { Adapter, MigrationLockOptions } from "../adapter.ts";
 import { connectPg, skipWithoutPg } from "../postgres.test-helper.ts";
 import { createRepo, type Repo } from "../repo.ts";
 import { sqlite } from "../sqlite/index.ts";
 import {
+  index,
   MigrationError,
   migration,
   references,
@@ -355,10 +356,12 @@ describe("migrator on SQLite", () => {
 
 describe("lock for migrations", () => {
   const locks: string[] = [];
+  const lockOptions: MigrationLockOptions[] = [];
   const adapter: Adapter = {
     ...sqlite(),
-    async lockForMigrations(_meta, source, fn) {
+    async lockForMigrations(_meta, source, fn, options) {
       locks.push(source);
+      lockOptions.push(options);
       return fn();
     },
   };
@@ -401,6 +404,125 @@ describe("lock for migrations", () => {
     await unlocked.rollback();
     assert.deepEqual(locks, []);
   });
+
+  test("passes the strategy and the advisory lock's retries to the adapter", async () => {
+    lockOptions.length = 0;
+    const migrations = { "1_a": noop() };
+    const m = createMigrator({ repo, migrations });
+    await m.migrate();
+    await m.rollback();
+    const advisory = createMigrator({
+      repo,
+      migrations,
+      migrationLock: "pgAdvisoryLock",
+      migrationAdvisoryLockRetryIntervalMs: 10,
+      migrationAdvisoryLockMaxTries: 3,
+    });
+    await advisory.migrate();
+    await advisory.rollback();
+    assert.deepEqual(lockOptions, [
+      ...Array(2).fill({
+        strategy: "tableLock",
+        advisoryLockRetryIntervalMs: 5000,
+        advisoryLockMaxTries: Infinity,
+      }),
+      ...Array(2).fill({
+        strategy: "pgAdvisoryLock",
+        advisoryLockRetryIntervalMs: 10,
+        advisoryLockMaxTries: 3,
+      }),
+    ]);
+  });
+});
+
+describe("concurrent index warnings (Ecto's runner warnings)", () => {
+  // Indexes run nothing, so only the warnings are checked.
+  const fake = (name: string): Adapter => {
+    const adapter = sqlite();
+    return {
+      ...adapter,
+      name,
+      ddl: (command) =>
+        "object" in command && command.object.kind === "index"
+          ? []
+          : (adapter.ddl?.(command) ?? []),
+    };
+  };
+  const warnings = async (
+    t: TestContext,
+    name: string,
+    options: {
+      disableDdlTransaction?: boolean;
+      disableMigrationLock?: boolean;
+    },
+    migrationLock?: "pgAdvisoryLock",
+  ) => {
+    const emit = t.mock.method(process, "emitWarning", () => {});
+    const repo = createRepo({
+      adapter: fake(name),
+      database: ":memory:",
+      poolSize: 1,
+    });
+    try {
+      const m = createMigrator({
+        repo,
+        migrations: {
+          "1_index": migration({
+            ...options,
+            change(m) {
+              m.create(index("posts", ["slug"], { concurrently: true }));
+              m.create(index("posts", ["title"]));
+            },
+          }),
+        },
+        ...(migrationLock !== undefined && { migrationLock }),
+      });
+      await m.migrate();
+      await m.rollback();
+    } finally {
+      await repo.stop();
+    }
+    return emit.mock.calls.map((call) => String(call.arguments[0]));
+  };
+
+  test("warn going up and down without disabling the DDL transaction and the lock", async (t) => {
+    const messages = await warnings(t, "postgres", {});
+    assert.equal(messages.length, 4);
+    assert.equal(
+      messages[0],
+      "Migration 1_index has set index `posts_slug_index` on table `posts` to concurrently but did not disable ddl transaction. Please set:\n\n    migration({ disableDdlTransaction: true, ... })\n",
+    );
+    assert.match(messages[1] ?? "", /did not disable migration lock/);
+    assert.match(messages[1] ?? "", /migrationLock: "pgAdvisoryLock"/);
+  });
+
+  test("only Postgres suggests the advisory lock", async (t) => {
+    const messages = await warnings(t, "sqlite", {
+      disableDdlTransaction: true,
+    });
+    assert.equal(messages.length, 2);
+    assert.match(messages[0] ?? "", /did not disable migration lock/);
+    assert.doesNotMatch(messages[0] ?? "", /pgAdvisoryLock/);
+  });
+
+  test("do not warn when disabled, or with the advisory lock on Postgres", async (t) => {
+    assert.deepEqual(
+      await warnings(t, "postgres", {
+        disableDdlTransaction: true,
+        disableMigrationLock: true,
+      }),
+      [],
+    );
+    assert.deepEqual(
+      await warnings(
+        t,
+        "postgres",
+        { disableDdlTransaction: true },
+        "pgAdvisoryLock",
+      ),
+      [],
+    );
+  });
 });
 
 describe("migrator on Postgres", { skip: skipWithoutPg }, () => {
@@ -433,6 +555,114 @@ describe("migrator on Postgres", { skip: skipWithoutPg }, () => {
       await sql.raw(`DROP TABLE IF EXISTS "${source}"`).execute(repo.kysely);
       await repo.stop();
     }
+  });
+});
+
+describe("migrator with the Postgres advisory lock", {
+  skip: skipWithoutPg,
+}, () => {
+  if (skipWithoutPg) return;
+  const repo = connectPg();
+  const source = "mig_schema_migrations_advisory";
+  const posts = "mig_posts_advisory";
+  after(async () => {
+    await sql
+      .raw(`DROP TABLE IF EXISTS "${source}", "${source}_2", "${posts}"`)
+      .execute(repo.kysely);
+    await repo.stop();
+  });
+
+  test("concurrent migrators run each migration once", async () => {
+    let runs = 0;
+    const migrations: Migrations = {
+      "1_slow": migration({
+        up(m) {
+          m.execute(async (q) => {
+            runs++;
+            await sql`SELECT pg_sleep(0.05)`.execute(q);
+          });
+        },
+      }),
+    };
+    const make = () =>
+      createMigrator({
+        repo,
+        migrations,
+        migrationSource: `${source}_2`,
+        migrationLock: "pgAdvisoryLock",
+        migrationAdvisoryLockRetryIntervalMs: 10,
+      });
+    // The migrations table must exist first.
+    await make().status();
+    const [a, b] = await Promise.all([make().migrate(), make().migrate()]);
+    assert.equal(runs, 1);
+    assert.equal(a.length + b.length, 1);
+  });
+
+  test("lets a migration create an index concurrently, and fails after its retries", async (t) => {
+    t.mock.method(process, "emitWarning", () => {});
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = () => {};
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const migrations: Migrations = {
+      "1_posts": migration({
+        change(m) {
+          m.create(table(posts), (t) => t.add("slug", "string"));
+        },
+      }),
+      "2_index": migration({
+        disableDdlTransaction: true,
+        up(m) {
+          m.create(index(posts, ["slug"], { concurrently: true }));
+          m.execute(async () => {
+            started();
+            await held;
+          });
+        },
+        down(m) {
+          m.drop(index(posts, ["slug"], { concurrently: true }));
+        },
+      }),
+    };
+    const make = (maxTries?: number) =>
+      createMigrator({
+        repo,
+        migrations,
+        migrationSource: source,
+        migrationLock: "pgAdvisoryLock",
+        migrationAdvisoryLockRetryIntervalMs: 10,
+        ...(maxTries !== undefined && {
+          migrationAdvisoryLockMaxTries: maxTries,
+        }),
+      });
+    await make().migrate({ step: 1 });
+    const first = make().migrate();
+    await running;
+    await assert.rejects(make(2).migrate(), (error: unknown) => {
+      assert.ok(error instanceof MigrationError);
+      assert.match(
+        error.message,
+        /failed to obtain advisory lock\. Tried 2 times waiting 10ms between tries/,
+      );
+      return true;
+    });
+    release();
+    assert.equal((await first).length, 1);
+    const { rows } = await sql<{
+      indexname: string;
+    }>`SELECT indexname FROM pg_indexes WHERE tablename = ${posts}`.execute(
+      repo.kysely,
+    );
+    assert.deepEqual(
+      rows.map((row) => row.indexname),
+      [`${posts}_slug_index`],
+    );
+    await make().rollback({ all: true });
   });
 });
 

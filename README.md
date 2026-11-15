@@ -535,7 +535,9 @@ ekto gen.schemas              # write schemas for the tables of an existing data
 
 `migrate`, `rollback` and `status` start the Repo with a pool of 2 (`--pool-size N`). On
 PostgreSQL the migration lock holds one connection while another runs the migration, so a pool of
-one fails, as in Ecto. Other options: `--config`, `--migrations`, `--no-lock`, and for
+one fails, as in Ecto. `migrationLock: "pgAdvisoryLock"` in the config takes a Postgres advisory
+lock instead of locking the migrations table, as Ecto's `migration_lock: :pg_advisory_lock`, so
+migrations can create indexes concurrently and stay locked. Other options: `--config`, `--migrations`, `--no-lock`, and for
 `gen.schema` `--binary-id` (UUID keys, or `binaryId: true` in the config) and
 `--migration ekto|kysely|none`. `ekto --help` lists them all.
 
