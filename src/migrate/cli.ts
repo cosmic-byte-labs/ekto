@@ -1,8 +1,9 @@
 /**
  * The `ekto` command: `ekto migrate`, `ekto rollback`, `ekto status`,
  * `ekto gen.migration <name>` (Ecto's `mix ecto.migrate`, `ecto.rollback`,
- * `ecto.migrations` and `ecto.gen.migration`) and `ekto gen.schema`
- * (Phoenix's `mix phx.gen.schema`).
+ * `ecto.migrations` and `ecto.gen.migration`), `ekto gen.schema`
+ * (Phoenix's `mix phx.gen.schema`) and `ekto gen.schemas`, which writes
+ * schemas for an existing database's tables.
  *
  * The configuration file (`ekto.config.ts` or `ekto.config.js`, or
  * `--config`) default-exports an `EktoConfig`, or a function returning it.
@@ -17,6 +18,7 @@ import type { Adapter } from "../adapter.ts";
 import {
   generate,
   generateSchema,
+  generateSchemas,
   type MigrationFormat,
   parseAttrs,
 } from "./gen.ts";
@@ -50,6 +52,8 @@ commands:
   gen.schema <Name> <table> [field:type[:unique]...]
                         create a schema and its migration, e.g.
                         gen.schema Post posts title body:text user_id:references:users
+  gen.schemas [table[:Name]...]
+                        create schemas for the database's tables, all by default
 
 options:
   --all                 run (or roll back) every migration
@@ -179,6 +183,40 @@ export async function main(
       return 0;
     } finally {
       await config?.db.destroy();
+    }
+  }
+
+  if (command === "gen.schemas") {
+    const config = await loadConfig(values.config);
+    try {
+      const tables =
+        rest.length === 0
+          ? undefined
+          : new Map(
+              rest.map((arg) => {
+                const [table = "", name] = arg.split(":");
+                return [table, name] as const;
+              }),
+            );
+      const { written, skipped } = await generateSchemas(
+        config.db,
+        config.adapter,
+        {
+          schemasFolder:
+            values.schemas ?? config.schemasFolder ?? "src/schemas",
+          ...(tables && { tables }),
+          exclude: [
+            config.migrationSource ?? "schema_migrations",
+            "kysely_migration",
+            "kysely_migration_lock",
+          ],
+        },
+      );
+      for (const file of written) out(`* creating ${file}`);
+      for (const file of skipped) out(`* skipping ${file} (it exists)`);
+      return 0;
+    } finally {
+      await config.db.destroy();
     }
   }
 

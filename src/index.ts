@@ -2,9 +2,11 @@
 
 export type {
   Adapter,
+  ColumnDescription,
   ConstraintViolation,
   QueryEvent,
   QueryResult,
+  TableDescription,
 } from "./adapter.ts";
 export {
   type Association,

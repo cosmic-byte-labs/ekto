@@ -101,6 +101,22 @@ export default migration({
     await run("status");
     assert.match(lines.join("\n"), /up\s+\d{14}\s+create_users/);
 
+    assert.equal(
+      await run("gen.schemas", "--schemas", join(dir, "schemas")),
+      0,
+      "every table but schema_migrations",
+    );
+    assert.deepEqual(lines, [`* creating ${join(dir, "schemas", "user.ts")}`]);
+    await run(
+      "gen.schemas",
+      "users:Account",
+      "--schemas",
+      join(dir, "schemas"),
+    );
+    assert.deepEqual(lines, [
+      `* creating ${join(dir, "schemas", "account.ts")}`,
+    ]);
+
     assert.equal(await run("rollback", "--step", "1"), 0);
     assert.match(lines.join("\n"), /== Rolled back \d{14} create_users/);
     await run("rollback", "--all");

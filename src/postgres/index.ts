@@ -10,6 +10,7 @@ import type { AnySchema } from "../schema.ts";
 import { quoteIdentifierAnsi, type SqlSyntax } from "../sql.ts";
 import type { PrimitiveType } from "../type.ts";
 import { postgresColumnType, postgresDdl } from "./ddl.ts";
+import { describeTables } from "./describe.ts";
 
 /** How PostgreSQL writes `sql` values: `$1`, `$2`… and double-quoted identifiers. */
 export const postgresSyntax: SqlSyntax = Object.freeze({
@@ -199,6 +200,7 @@ export function postgres(): Adapter {
     toConstraints,
     ddl: postgresDdl,
     columnType: postgresColumnType,
+    describeTables,
     lockForMigrations,
   });
 }

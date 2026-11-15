@@ -6,7 +6,8 @@
 import { existsSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { Adapter } from "../adapter.ts";
+import type { Kysely } from "kysely";
+import type { Adapter, TableDescription } from "../adapter.ts";
 import {
   type ColumnOptions,
   type ColumnType,
@@ -209,14 +210,32 @@ function checkSpec(spec: SchemaSpec) {
 const list = (names: readonly string[]) =>
   `[${names.map((n) => JSON.stringify(n)).join(", ")}]`;
 
+/** A field of a schema module. */
+interface ModuleField {
+  /** As written in the schema, e.g. `email: t.string()` or `...t.timestamps()`. */
+  readonly source: string;
+  /** The field's name, when the changeset casts it. */
+  readonly cast?: string;
+  readonly required?: boolean;
+  /** A unique index on it: its name, or `true` for the conventional one. */
+  readonly unique?: string | true;
+}
+
 /** The schema module: the schema, its record type and a changeset function. */
-export function schemaSource(spec: SchemaSpec): string {
-  checkSpec(spec);
-  const name = spec.name.split(".").at(-1) as string;
-  const param = name[0]?.toLowerCase() + name.slice(1);
-  const cast = spec.attrs.filter((a) => !a.reference).map((a) => a.name);
-  const unique = spec.attrs.filter((a) => a.unique).map((a) => a.name);
-  const usesTypes = spec.attrs.some((a) => a.field.includes("types."));
+function renderSchema(
+  name: string,
+  table: string,
+  fields: readonly ModuleField[],
+): string {
+  const short = name.split(".").at(-1) as string;
+  const param = short[0]?.toLowerCase() + short.slice(1);
+  const cast = fields.flatMap((f) => (f.cast ? [f.cast] : []));
+  const required = fields.flatMap((f) =>
+    f.cast && f.required ? [f.cast] : [],
+  );
+  const unique = fields.flatMap((f) =>
+    f.cast && f.unique ? [[f.cast, f.unique] as const] : [],
+  );
   const imports = [
     "type Changeset",
     "cast",
@@ -225,30 +244,28 @@ export function schemaSource(spec: SchemaSpec): string {
     "pipe",
     "schema",
     "t",
-    ...(usesTypes ? ["types"] : []),
+    ...(fields.some((f) => f.source.includes("types.")) ? ["types"] : []),
     ...(unique.length > 0 ? ["uniqueConstraint"] : []),
-    "validateRequired",
-  ];
-  const fields = [
-    spec.binaryId ? "id: t.uuid().primaryKey().autogenerate()" : "id: t.id()",
-    ...spec.attrs.map((a) => `${a.name}: ${a.field}`),
-    "...t.timestamps()",
+    ...(required.length > 0 ? ["validateRequired"] : []),
   ];
   const steps = [
     `cast(${param}, attrs, ${list(cast)})`,
-    `validateRequired(${list(cast)})`,
-    ...unique.map((u) => `uniqueConstraint(${JSON.stringify(u)})`),
+    ...(required.length > 0 ? [`validateRequired(${list(required)})`] : []),
+    ...unique.map(
+      ([field, index]) =>
+        `uniqueConstraint(${JSON.stringify(field)}${index === true ? "" : `, { name: ${JSON.stringify(index)} }`})`,
+    ),
   ];
   return `import {
 ${imports.map((i) => `  ${i},`).join("\n")}
 } from "ekto";
 
-export const ${name} = schema(${JSON.stringify(spec.table)}, {
-${fields.map((f) => `  ${f},`).join("\n")}
+export const ${short} = schema(${JSON.stringify(table)}, {
+${fields.map((f) => `  ${f.source},`).join("\n")}
 });
-export type ${name} = Infer<typeof ${name}>;
+export type ${short} = Infer<typeof ${short}>;
 
-export function changeset<D extends ${name} | New<typeof ${name}>>(
+export function changeset<D extends ${short} | New<typeof ${short}>>(
   ${param}: D | Changeset<D>,
   attrs: unknown,
 ): Changeset<D> {
@@ -257,6 +274,140 @@ ${steps.map((s) => `    ${s},`).join("\n")}
   );
 }
 `;
+}
+
+/**
+ * The schema module of `gen.schema`, as Phoenix writes it: every field but
+ * references is cast and required.
+ */
+export function schemaSource(spec: SchemaSpec): string {
+  checkSpec(spec);
+  return renderSchema(spec.name, spec.table, [
+    {
+      source: spec.binaryId
+        ? "id: t.uuid().primaryKey().autogenerate()"
+        : "id: t.id()",
+    },
+    ...spec.attrs.map((a) => ({
+      source: `${a.name}: ${a.field}`,
+      ...(!a.reference && { cast: a.name, required: true }),
+      ...(a.unique && { unique: true as const }),
+    })),
+    { source: "...t.timestamps()" },
+  ]);
+}
+
+const FIELDS: Readonly<Record<string, string>> = {
+  string: "string",
+  text: "string",
+  integer: "integer",
+  bigint: "integer",
+  float: "float",
+  decimal: "decimal",
+  boolean: "boolean",
+  map: "map",
+  binary: "binary",
+  uuid: "uuid",
+  date: "date",
+  time: "time",
+  utc_datetime: "utcDatetime",
+  utc_datetime_msec: "utcDatetimeMsec",
+};
+
+/** The field of a column (`t.integer()`), or `undefined` for unknown types. */
+function fieldOf(type: ColumnType | undefined): string | undefined {
+  if (type === undefined) return undefined;
+  if (typeof type !== "string") {
+    const inner = typeof type[1] === "string" ? FIELDS[type[1]] : undefined;
+    return inner === undefined ? undefined : `t.array(types.${inner})`;
+  }
+  const field = FIELDS[type];
+  return field === undefined ? undefined : `t.${field}()`;
+}
+
+/**
+ * The schema module of an existing table: its columns become fields,
+ * nullable ones `.nullable()`; the changeset casts all but the primary key,
+ * foreign keys and timestamps, and requires the columns that are `NOT NULL`
+ * without a default. Columns of unknown types become `t.any()`.
+ */
+export function tableSchemaSource(
+  name: string,
+  table: TableDescription,
+): string {
+  checkSpec({ name, table: table.name, attrs: [] });
+  const fks = new Set(table.foreignKeys.map((f) => f.column));
+  const pks = table.columns.filter((c) => c.primaryKey);
+  const columns = new Map(table.columns.map((c) => [c.name, c]));
+  const inserted = columns.get("inserted_at");
+  const updated = columns.get("updated_at");
+  const timestamps =
+    inserted !== undefined &&
+    updated !== undefined &&
+    inserted.type === updated.type &&
+    (inserted.type === "utc_datetime" ||
+      inserted.type === "utc_datetime_msec" ||
+      inserted.dbType.toUpperCase() === "TEXT");
+  const fields: ModuleField[] = [];
+  for (const c of table.columns) {
+    if (timestamps && (c === inserted || c === updated)) {
+      if (c === inserted)
+        fields.push({
+          source:
+            c.type === "utc_datetime_msec"
+              ? '...t.timestamps({ type: "utcDatetimeMsec" })'
+              : "...t.timestamps()",
+        });
+      continue;
+    }
+    const key = IDENTIFIER.test(c.name) ? c.name : JSON.stringify(c.name);
+    if (
+      c.primaryKey &&
+      pks.length === 1 &&
+      c.generated &&
+      fieldOf(c.type) === "t.integer()"
+    ) {
+      fields.push({ source: `${key}: t.id()` });
+      continue;
+    }
+    let field = fieldOf(c.type) ?? "t.any()";
+    if (c.primaryKey)
+      field += c.hasDefault
+        ? ".primaryKey().readAfterWrites()"
+        : c.type === "uuid"
+          ? ".primaryKey().autogenerate()"
+          : ".primaryKey()";
+    else if (c.hasDefault && !c.nullable) field += ".readAfterWrites()";
+    if (c.nullable) field += ".nullable()";
+    const comment = fieldOf(c.type) === undefined ? ` /* ${c.dbType} */` : "";
+    const unique = table.uniqueIndexes.find((u) => u.column === c.name);
+    const conventional = `${table.name}_${c.name}_index`;
+    fields.push({
+      source: `${key}: ${field}${comment}`,
+      ...(!c.primaryKey &&
+        !fks.has(c.name) && {
+          cast: c.name,
+          required: !c.nullable && !c.hasDefault,
+        }),
+      ...(unique && {
+        unique: unique.name === conventional ? (true as const) : unique.name,
+      }),
+    });
+  }
+  return renderSchema(name, table.name, fields);
+}
+
+/** `blog_posts` becomes `BlogPost`: camel-cased, the last word singular. */
+export function schemaName(table: string): string {
+  const words = table.split("_").filter((w) => w !== "");
+  const last = words.pop() ?? "";
+  const singular = last
+    .replace(/ies$/, "y")
+    .replace(/(ss|x|ch|sh)es$/, "$1")
+    .replace(/([^siu])s$/, "$1");
+  return [...words, singular]
+    .map((w) => (w[0]?.toUpperCase() ?? "") + w.slice(1))
+    .join("");
 }
 
 /** The commands of the schema's migration (as `migrationSource` writes them). */
@@ -494,4 +645,59 @@ export async function generateSchema(
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, schema, { flag: "wx" });
   return [file, ...files];
+}
+
+export interface GenerateSchemasOptions {
+  readonly schemasFolder: string;
+  /** The tables, each with its schema name (inferred when `undefined`); every table by default. */
+  readonly tables?: ReadonlyMap<string, string | undefined>;
+  /** Tables left out when `tables` is not given (e.g. the migrations table). */
+  readonly exclude?: readonly string[];
+}
+
+/**
+ * Writes a schema for each table of the database; existing files are
+ * skipped. Returns the files written and skipped.
+ */
+export async function generateSchemas(
+  // biome-ignore lint/suspicious/noExplicitAny: any database
+  db: Kysely<any>,
+  adapter: Adapter,
+  options: GenerateSchemasOptions,
+): Promise<{ written: string[]; skipped: string[] }> {
+  if (adapter.describeTables === undefined)
+    throw new Error(`the ${adapter.name} adapter cannot describe tables`);
+  const described = await adapter.describeTables(db);
+  let tables: [TableDescription, string][];
+  if (options.tables === undefined) {
+    const exclude = new Set(options.exclude ?? []);
+    tables = described
+      .filter((t) => !exclude.has(t.name))
+      .map((t) => [t, schemaName(t.name)]);
+  } else {
+    tables = [...options.tables].map(([name, schema]) => {
+      const table = described.find((t) => t.name === name);
+      if (table === undefined) throw new Error(`no table ${name}`);
+      return [table, schema ?? schemaName(name)];
+    });
+  }
+  const sources = tables.map(
+    ([table, name]) =>
+      [
+        join(options.schemasFolder, schemaFile(name)),
+        tableSchemaSource(name, table),
+      ] as const,
+  );
+  const written: string[] = [];
+  const skipped: string[] = [];
+  for (const [file, source] of sources) {
+    if (existsSync(file)) {
+      skipped.push(file);
+      continue;
+    }
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, source, { flag: "wx" });
+    written.push(file);
+  }
+  return { written, skipped };
 }

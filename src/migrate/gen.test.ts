@@ -14,11 +14,13 @@ import { sqlite } from "../sqlite/index.ts";
 import { main } from "./cli.ts";
 import {
   generateSchema,
+  generateSchemas,
   kyselyMigrationSource,
   migrationSource,
   parseAttrs,
   type SchemaSpec,
   schemaFile,
+  schemaName,
   schemaSource,
 } from "./gen.ts";
 import { createMigrator } from "./runner.ts";
@@ -325,4 +327,157 @@ describe("ekto gen.schema", () => {
       /Kysely migrations need the adapter/,
     );
   });
+});
+
+function fromDatabase(
+  name: string,
+  connect: () => AnyKysely,
+  adapter: Adapter,
+  ddl: (orgs: string, members: string) => string[],
+) {
+  describe(name, () => {
+    let dir: string;
+    const db = connect();
+    const orgs = `gen_db_orgs_${adapter.name}`;
+    const members = `gen_db_members_${adapter.name}`;
+    const drop = async () => {
+      for (const table of [members, orgs])
+        await sql`DROP TABLE IF EXISTS ${sql.table(table)}`.execute(db);
+    };
+    before(async () => {
+      dir = await mkdtemp(join(tmpdir(), "ekto-gen-db-"));
+      await drop();
+      for (const statement of ddl(orgs, members))
+        await sql.raw(statement).execute(db);
+    });
+    after(async () => {
+      await drop();
+      await db.destroy();
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    test("describes tables", async () => {
+      const tables = await adapter.describeTables?.(db);
+      const table = tables?.find((t) => t.name === members);
+      assert.ok(table);
+      assert.deepEqual(
+        table.columns.map((c) => [c.name, c.primaryKey, c.nullable]),
+        [
+          ["id", true, false],
+          ["email", false, false],
+          ["nickname", false, true],
+          ["role", false, false],
+          ["org_id", false, true],
+          ["inserted_at", false, false],
+          ["updated_at", false, false],
+        ],
+      );
+      assert.equal(table.columns[0]?.generated, true);
+      assert.deepEqual(table.foreignKeys, [
+        { column: "org_id", table: orgs, references: "id" },
+      ]);
+      assert.deepEqual(table.uniqueIndexes, [
+        { column: "email", name: `${members}_email_index` },
+      ]);
+    });
+
+    test("schemas for the tables work", async () => {
+      const folder = join(dir, "schemas");
+      const result = await generateSchemas(db, adapter, {
+        schemasFolder: folder,
+        tables: new Map([
+          [orgs, "Org"],
+          [members, undefined],
+        ]),
+      });
+      const memberName = schemaName(members);
+      assert.deepEqual(result.written, [
+        join(folder, "org.ts"),
+        join(folder, schemaFile(memberName)),
+      ]);
+      const source = await readFile(
+        join(folder, schemaFile(memberName)),
+        "utf8",
+      );
+      assert.match(source, /id: t\.id\(\),/);
+      assert.match(source, /nickname: t\.string\(\)\.nullable\(\),/);
+      assert.match(source, /role: t\.string\(\)\.readAfterWrites\(\),/);
+      assert.match(source, /\.\.\.t\.timestamps\(\),/);
+      assert.match(
+        source,
+        /cast\(\w+, attrs, \["email", "nickname", "role"\]\)/,
+      );
+      assert.match(source, /validateRequired\(\["email"\]\)/);
+      assert.match(source, /uniqueConstraint\("email"\)/);
+
+      const Org = (await link(join(folder, "org.ts"))).Org;
+      const Member = await link(join(folder, schemaFile(memberName)));
+      const repo = createRepo({ db, adapter });
+      const org = await repo.insertOrThrow(Org.new({ name: "acme" }));
+      const member = await repo.insertOrThrow(
+        Member.changeset(Member[memberName].new({ org_id: org.id }), {
+          email: "ann@x",
+        }),
+      );
+      assert.equal(member.role, "member", "read back after insert");
+      assert.equal(member.nickname, null);
+      const taken = await repo.insert(
+        Member.changeset(Member[memberName].new(), { email: "ann@x" }),
+      );
+      assert.equal(taken.ok, false);
+
+      const again = await generateSchemas(db, adapter, {
+        schemasFolder: folder,
+        tables: new Map([[orgs, "Org"]]),
+      });
+      assert.deepEqual(again, {
+        written: [],
+        skipped: [join(folder, "org.ts")],
+      });
+      await assert.rejects(
+        generateSchemas(db, adapter, {
+          schemasFolder: folder,
+          tables: new Map([["nope", undefined]]),
+        }),
+        /no table nope/,
+      );
+    });
+  });
+}
+
+fromDatabase(
+  "gen.schemas on SQLite",
+  () =>
+    new KyselyClass({
+      dialect: new SqliteDialect({ database: new Database(":memory:") }),
+    }),
+  sqlite(),
+  (orgs, members) => [
+    `CREATE TABLE ${orgs} (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)`,
+    `CREATE TABLE ${members} (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, nickname TEXT, role TEXT NOT NULL DEFAULT 'member', org_id INTEGER REFERENCES ${orgs}(id), inserted_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+    `CREATE UNIQUE INDEX ${members}_email_index ON ${members} (email)`,
+  ],
+);
+
+describe("gen.schemas on Postgres", { skip: skipWithoutPg }, () => {
+  if (skipWithoutPg) return;
+  fromDatabase(
+    "pool",
+    () => connectPg().db,
+    postgres(),
+    (orgs, members) => [
+      `CREATE TABLE ${orgs} (id bigserial PRIMARY KEY, name varchar(255) NOT NULL)`,
+      `CREATE TABLE ${members} (id bigserial PRIMARY KEY, email varchar(255) NOT NULL, nickname text, role text NOT NULL DEFAULT 'member', org_id bigint REFERENCES ${orgs}(id), inserted_at timestamp(0) NOT NULL, updated_at timestamp(0) NOT NULL)`,
+      `CREATE UNIQUE INDEX ${members}_email_index ON ${members} (email)`,
+    ],
+  );
+});
+
+test("schemaName", () => {
+  assert.equal(schemaName("users"), "User");
+  assert.equal(schemaName("blog_posts"), "BlogPost");
+  assert.equal(schemaName("categories"), "Category");
+  assert.equal(schemaName("addresses"), "Address");
+  assert.equal(schemaName("boxes"), "Box");
+  assert.equal(schemaName("status"), "Status");
 });

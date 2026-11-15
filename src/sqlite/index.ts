@@ -8,6 +8,7 @@ import type { AnySchema } from "../schema.ts";
 import { quoteIdentifierAnsi, type SqlSyntax } from "../sql.ts";
 import type { PrimitiveType } from "../type.ts";
 import { sqliteColumnType, sqliteDdl } from "./ddl.ts";
+import { describeTables } from "./describe.ts";
 
 /** How SQLite writes `sql` values: `?` placeholders and double-quoted identifiers. */
 export const sqliteSyntax: SqlSyntax = Object.freeze({
@@ -214,6 +215,7 @@ export function sqlite(): Adapter {
     toConstraints,
     ddl: sqliteDdl,
     columnType: sqliteColumnType,
+    describeTables,
   });
 }
 
