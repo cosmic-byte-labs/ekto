@@ -665,6 +665,15 @@ describe("migrations on SQLite", () => {
   );
 });
 
+describe("migrations on SQLite with node:sqlite", () => {
+  suite(() =>
+    createRepo({
+      adapter: sqlite({ driver: "node:sqlite" }),
+      database: ":memory:",
+    }),
+  );
+});
+
 describe("migrations on Postgres", { skip: skipWithoutPg }, () => {
   if (skipWithoutPg) return;
   suite(() => connectPg());

@@ -52,7 +52,8 @@ pnpm add ekto kysely sqlite3
 ```
 
 `pg` and `sqlite3` are optional peer dependencies: install the one you use. `sqlite3` builds a
-native addon; pnpm asks you to approve its build (`pnpm approve-builds`).
+native addon; pnpm asks you to approve its build (`pnpm approve-builds`). SQLite can also use
+Node's built-in `node:sqlite`, which needs no package (see [SQLite](#sqlite)).
 
 ## Quickstart
 
@@ -592,6 +593,20 @@ would open its own.
 
 Adding and dropping check constraints in a migration needs SQLite 3.53, as ecto_sqlite3 says;
 `sqlite3` 6.0.1 bundles 3.52, which adds them but cannot drop them.
+
+`sqlite({ driver: "node:sqlite" })` connects with Node's built-in `node:sqlite` instead, so
+nothing needs installing or building (Node prints that it is experimental). It runs each query on
+the event loop's thread: a long query, or a wait of up to `busyTimeout` for a write lock another
+process holds, stops everything else in the process meanwhile. Its pool has one connection by
+default, as with more, a connection waiting for another's lock would hold the thread the other
+needs to commit.
+
+```ts
+const repo = createRepo<DB>({
+  adapter: sqlite({ driver: "node:sqlite" }),
+  database: "app.db",
+});
+```
 
 ### Pool and other options
 

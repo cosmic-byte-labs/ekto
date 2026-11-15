@@ -2,6 +2,7 @@
  * SQLite support (`ekto/sqlite`), following ecto_sqlite3.
  */
 
+import type { SQLInputValue } from "node:sqlite";
 import {
   CompiledQuery,
   type DatabaseConnection,
@@ -12,7 +13,7 @@ import {
   SqliteIntrospector,
   SqliteQueryCompiler,
 } from "kysely";
-import sqlite3 from "sqlite3";
+import type { Database as Sqlite3Database } from "sqlite3";
 import type {
   Adapter,
   ConnectionOptions,
@@ -32,10 +33,12 @@ export const sqliteSyntax: SqlSyntax = Object.freeze({
 });
 
 /**
- * What node-sqlite3 returns, for the storage classes ecto_sqlite3 uses:
- * integers are numbers (past 2^53 they lose precision), blobs Buffers, booleans are integers, dates, times and
- * date-times ISO 8601 text, maps and arrays JSON text, and decimals have
- * numeric affinity, so they usually come back as numbers.
+ * What node-sqlite3 and `node:sqlite` return, for the storage classes
+ * ecto_sqlite3 uses: integers are numbers (past 2^53, node-sqlite3 loses
+ * precision and `node:sqlite` throws), blobs are Uint8Arrays (Buffers from
+ * node-sqlite3), booleans are integers, dates, times and date-times ISO
+ * 8601 text, maps and arrays JSON text, and decimals have numeric affinity,
+ * so they usually come back as numbers.
  */
 export type SqliteTypes = {
   readonly id: DriverValue<number>;
@@ -172,14 +175,22 @@ function indexName(columns: string): string {
   ].join("_");
 }
 
-/** The constraint violated by a node-sqlite3 error (ecto_sqlite3's `to_constraints/2`). */
+/**
+ * The constraint violated by a node-sqlite3 or `node:sqlite` error
+ * (ecto_sqlite3's `to_constraints/2`).
+ */
 function toConstraints(error: unknown): readonly ConstraintViolation[] {
   if (typeof error !== "object" || error === null) return [];
-  const { code, message: full } = error as {
-    code?: unknown;
-    message?: unknown;
-  };
-  if (code !== "SQLITE_CONSTRAINT" || typeof full !== "string") return [];
+  const {
+    code,
+    errcode,
+    message: full,
+  } = error as { code?: unknown; errcode?: unknown; message?: unknown };
+  // node-sqlite3 gives the code's name, node:sqlite the extended result code.
+  const constraint =
+    code === "SQLITE_CONSTRAINT" ||
+    (typeof errcode === "number" && (errcode & 0xff) === SQLITE_CONSTRAINT);
+  if (!constraint || typeof full !== "string") return [];
   // node-sqlite3 prefixes SQLite's message with the code.
   const message = full.replace(/^SQLITE_CONSTRAINT: /, "");
   const unique = /^UNIQUE constraint failed: (.+)$/.exec(message)?.[1];
@@ -196,18 +207,52 @@ function toConstraints(error: unknown): readonly ConstraintViolation[] {
   return [];
 }
 
+const SQLITE_CONSTRAINT = 19;
+
 type Row = Record<string, unknown>;
 
-function all(
-  db: sqlite3.Database,
-  sql: string,
-  parameters: readonly unknown[],
-): Promise<Row[]> {
-  return new Promise((resolve, reject) =>
-    db.all(sql, parameters, (error: Error | null, rows: Row[]) =>
-      error ? reject(error) : resolve(rows),
-    ),
-  );
+/** An open SQLite database, as ekto's driver uses it. */
+interface SqliteHandle {
+  /** Runs one statement and returns its rows (none for most writes). */
+  all(sql: string, parameters: readonly unknown[]): Promise<Row[]>;
+  close(): Promise<void>;
+}
+
+/** Opens `file` with node-sqlite3, which runs statements on libuv's thread pool. */
+async function openSqlite3(file: string): Promise<SqliteHandle> {
+  const { default: sqlite3 } = await import("sqlite3");
+  const db = await new Promise<Sqlite3Database>((resolve, reject) => {
+    const db: Sqlite3Database = new sqlite3.Database(file, (error) =>
+      error ? reject(error) : resolve(db),
+    );
+  });
+  return {
+    all: (sql, parameters) =>
+      new Promise((resolve, reject) =>
+        db.all(sql, parameters, (error: Error | null, rows: Row[]) =>
+          error ? reject(error) : resolve(rows),
+        ),
+      ),
+    close: () =>
+      new Promise((resolve, reject) =>
+        db.close((error) => (error ? reject(error) : resolve())),
+      ),
+  };
+}
+
+/** Opens `file` with Node's `node:sqlite`, which runs statements on the event loop's thread. */
+async function openNodeSqlite(file: string): Promise<SqliteHandle> {
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(file);
+  return {
+    all: async (sql, parameters) =>
+      db
+        .prepare(sql)
+        .all(...(parameters as SQLInputValue[]))
+        // Its rows have no prototype; the other drivers' are plain objects.
+        .map((row) => ({ ...row })),
+    close: async () => db.close(),
+  };
 }
 
 const WRITES = new Set([
@@ -226,23 +271,19 @@ function writes({ query, sql }: CompiledQuery): boolean {
   return query.kind === "RawNode" && /INSERT|DELETE|UPDATE/.test(sql);
 }
 
-/** One node-sqlite3 database, as an Exqlite connection. */
+/** One SQLite database, as an Exqlite connection. */
 class SqliteConnection implements DatabaseConnection {
-  readonly #db: sqlite3.Database;
+  readonly #db: SqliteHandle;
 
-  constructor(db: sqlite3.Database) {
+  constructor(db: SqliteHandle) {
     this.#db = db;
   }
 
   async executeQuery<R>(compiled: CompiledQuery): Promise<QueryResult<R>> {
-    const rows = (await all(
-      this.#db,
-      compiled.sql,
-      compiled.parameters,
-    )) as R[];
+    const rows = (await this.#db.all(compiled.sql, compiled.parameters)) as R[];
     if (!writes(compiled)) return { rows };
     // Exqlite's num_rows for a write: sqlite3_changes(), on the same connection.
-    const [result] = await all(this.#db, "SELECT changes() AS changes", []);
+    const [result] = await this.#db.all("SELECT changes() AS changes", []);
     return { rows, numAffectedRows: BigInt(result?.changes as number) };
   }
 
@@ -256,13 +297,13 @@ class SqliteConnection implements DatabaseConnection {
   }
 }
 
-/** A Kysely driver holding one node-sqlite3 database, as Kysely's SqliteDriver holds one. */
-class Sqlite3Driver implements Driver {
-  readonly #open: () => Promise<sqlite3.Database>;
-  #db: sqlite3.Database | undefined;
+/** A Kysely driver holding one SQLite database, as Kysely's SqliteDriver holds one. */
+class SqliteHandleDriver implements Driver {
+  readonly #open: () => Promise<SqliteHandle>;
+  #db: SqliteHandle | undefined;
   #connection: SqliteConnection | undefined;
 
-  constructor(open: () => Promise<sqlite3.Database>) {
+  constructor(open: () => Promise<SqliteHandle>) {
     this.#open = open;
   }
 
@@ -319,65 +360,70 @@ class Sqlite3Driver implements Driver {
     const db = this.#db;
     this.#db = undefined;
     this.#connection = undefined;
-    if (db !== undefined) await close(db);
+    await db?.close();
   }
 }
 
-function close(db: sqlite3.Database): Promise<void> {
-  return new Promise((resolve, reject) =>
-    db.close((error) => (error ? reject(error) : resolve())),
-  );
+/** The SQLite library the adapter connects with. */
+export type SqliteDriverName = "sqlite3" | "node:sqlite";
+
+export interface SqliteOptions {
+  /**
+   * `"sqlite3"` (node-sqlite3, the default) runs queries on libuv's thread
+   * pool; `"node:sqlite"`, built into Node, runs them on the event loop's
+   * thread and needs no package.
+   */
+  readonly driver?: SqliteDriverName;
 }
 
 /**
- * Connections to the `database` file with node-sqlite3, set up as
- * ecto_sqlite3 and Exqlite set them up: a `busy_timeout` of 2000 ms,
- * `journal_mode` WAL, and foreign keys on.
+ * Connections to the `database` file, set up as ecto_sqlite3 and Exqlite
+ * set them up: a `busy_timeout` of 2000 ms, `journal_mode` WAL, and
+ * foreign keys on.
  */
-function connect(options: ConnectionOptions, poolSize: number): Dialect {
-  const {
-    database,
-    journalMode = "wal",
-    busyTimeout = 2000,
-    foreignKeys = true,
-  } = options;
-  if (database === undefined)
-    throw new TypeError(
-      'No SQLite database path specified. Give the Repo a database: createRepo({ adapter: sqlite(), database: "path/to/database.db" })',
-    );
-  if (database === ":memory:" && poolSize !== 1)
-    throw new TypeError("In memory databases must have a poolSize of 1");
-  const open = async () => {
-    const db = await new Promise<sqlite3.Database>((resolve, reject) => {
-      const db: sqlite3.Database = new sqlite3.Database(database, (error) =>
-        error ? reject(error) : resolve(db),
+function connector(driver: SqliteDriverName) {
+  const openFile = driver === "node:sqlite" ? openNodeSqlite : openSqlite3;
+  return (options: ConnectionOptions, poolSize: number): Dialect => {
+    const {
+      database,
+      journalMode = "wal",
+      busyTimeout = 2000,
+      foreignKeys = true,
+    } = options;
+    if (database === undefined)
+      throw new TypeError(
+        'No SQLite database path specified. Give the Repo a database: createRepo({ adapter: sqlite(), database: "path/to/database.db" })',
       );
-    });
-    try {
-      for (const pragma of [
-        `busy_timeout = ${busyTimeout}`,
-        `journal_mode = ${journalMode}`,
-        `foreign_keys = ${foreignKeys ? "ON" : "OFF"}`,
-      ])
-        await all(db, `PRAGMA ${pragma}`, []);
-    } catch (error) {
-      await close(db).catch(() => {});
-      throw error;
-    }
-    return db;
-  };
-  return {
-    // One node-sqlite3 database per driver, so per pooled connection.
-    createDriver: () => new Sqlite3Driver(open),
-    createQueryCompiler: () => new SqliteQueryCompiler(),
-    createAdapter: () => new SqliteAdapter(),
-    createIntrospector: (db) => new SqliteIntrospector(db),
+    if (database === ":memory:" && poolSize !== 1)
+      throw new TypeError("In memory databases must have a poolSize of 1");
+    const open = async () => {
+      const db = await openFile(database);
+      try {
+        for (const pragma of [
+          `busy_timeout = ${busyTimeout}`,
+          `journal_mode = ${journalMode}`,
+          `foreign_keys = ${foreignKeys ? "ON" : "OFF"}`,
+        ])
+          await db.all(`PRAGMA ${pragma}`, []);
+      } catch (error) {
+        await db.close().catch(() => {});
+        throw error;
+      }
+      return db;
+    };
+    return {
+      // One database per driver, so per pooled connection.
+      createDriver: () => new SqliteHandleDriver(open),
+      createQueryCompiler: () => new SqliteQueryCompiler(),
+      createAdapter: () => new SqliteAdapter(),
+      createIntrospector: (db) => new SqliteIntrospector(db),
+    };
   };
 }
 
 /**
- * The SQLite adapter, connecting with node-sqlite3 (the `sqlite3` package,
- * which the application installs) to the `database` file:
+ * The SQLite adapter, connecting to the `database` file with node-sqlite3
+ * (the `sqlite3` package, which the application installs):
  *
  * ```ts
  * const repo = createRepo<DB>({ adapter: sqlite(), database: "app.db" });
@@ -390,6 +436,14 @@ function connect(options: ConnectionOptions, poolSize: number): Dialect {
  * `":memory:"` databases must have a pool of one, as each connection would
  * open its own.
  *
+ * `sqlite({ driver: "node:sqlite" })` connects with Node's built-in
+ * `node:sqlite` instead, which needs no package (Node prints that it is
+ * experimental). It runs each query on the event loop's thread: a long
+ * query, or a wait of up to `busyTimeout` for a write lock another process
+ * holds, stops everything else meanwhile. Its pool has one connection, as
+ * with more, one waiting for another's write lock would hold the thread
+ * the other needs to commit.
+ *
  * Values are stored as ecto_sqlite3 stores them: booleans as 0 and 1,
  * maps and arrays as JSON text, date-times as ISO 8601 text in UTC.
  *
@@ -397,12 +451,17 @@ function connect(options: ConnectionOptions, poolSize: number): Dialect {
  * the reported columns (`users_email_index`); foreign key violations carry
  * no name and are always thrown.
  */
-export function sqlite(): Adapter {
+export function sqlite(options: SqliteOptions = {}): Adapter {
+  const driver = options.driver ?? "sqlite3";
+  if (driver !== "sqlite3" && driver !== "node:sqlite")
+    throw new TypeError(
+      `unknown SQLite driver ${String(driver)}, expected "sqlite3" or "node:sqlite"`,
+    );
   return Object.freeze({
     name: "sqlite",
     syntax: sqliteSyntax,
-    defaultPoolSize: 5,
-    connect,
+    defaultPoolSize: driver === "node:sqlite" ? 1 : 5,
+    connect: connector(driver),
     load: loadValue,
     dump: dumpValue,
     toConstraints,
