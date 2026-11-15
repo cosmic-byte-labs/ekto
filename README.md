@@ -5,7 +5,7 @@ violations into field errors, composable queries, and a Repo that is the only pa
 that touches the database. Inspired by Elixir's [Ecto](https://hexdocs.pm/ecto); not affiliated
 with it.
 
-**Status:** design stage, nothing usable yet. The proposal is in `docs/design.md`.
+**Status:** early development, nothing usable yet.
 
 ## Development
 

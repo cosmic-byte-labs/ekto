@@ -1,8 +1,7 @@
 # Working on ekto
 
 This file is for coding agents (Claude Code reads it through `CLAUDE.md`). People start with
-[README.md](README.md); the design is in [docs/design.md](docs/design.md) (on the design PR until it
-merges).
+[README.md](README.md).
 
 ekto is an Ecto-inspired data layer for TypeScript: schemas, changesets, composable queries, and a
 Repo that is the only part that touches the database. It is a library; there is no server to run.
