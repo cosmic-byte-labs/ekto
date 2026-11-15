@@ -45,7 +45,7 @@
     "format": "biome check --write .",
     "test": "node --test 'src/**/*.test.ts'",
     "test:coverage": "node --test --experimental-test-coverage 'src/**/*.test.ts'",
-    "docs": "typedoc",
+    "docs:build": "typedoc",
     "docs:check": "typedoc --emit none",
     "check": "biome check . && tsc --noEmit && pnpm test && pnpm build && pnpm docs:check"
   },

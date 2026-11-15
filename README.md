@@ -646,5 +646,5 @@ pnpm check                          # lint, typecheck, tests, build, API docs
 pnpm test                           # node --test over src/**/*.test.ts
 EKTO_PG_URL=postgres://… pnpm test  # also run the Repo tests against Postgres
 pnpm format                         # Biome: fix formatting and lint
-pnpm docs                           # API docs with TypeDoc, in docs/api
+pnpm docs:build                     # API docs with TypeDoc, in docs/api
 ```
