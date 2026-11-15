@@ -18,6 +18,19 @@ transaction, migrations with an `ekto` command, and a test sandbox that rolls ba
 
 **Status:** early development. The API may still change, and the package is not on npm yet.
 
+## Guides
+
+Guides that follow Ecto's own, in `guides/` and in the API docs (`pnpm docs:build`):
+
+- [Getting Started](guides/introduction/getting-started.md)
+- How-To's: [Aggregates and subqueries](guides/howtos/aggregates-and-subqueries.md),
+  [Constraints and upserts](guides/howtos/constraints-and-upserts.md),
+  [Data mapping and validation](guides/howtos/data-mapping-and-validation.md),
+  [Dynamic queries](guides/howtos/dynamic-queries.md),
+  [Self-referencing many to many](guides/howtos/self-referencing-many-to-many.md),
+  [Test factories](guides/howtos/test-factories.md)
+- [Testing with ekto](guides/testing/testing-with-ekto.md)
+
 ## Features
 
 - Schemas as plain objects with typed fields, defaults, virtual and redacted fields, timestamps
@@ -646,5 +659,5 @@ pnpm check                          # lint, typecheck, tests, build, API docs
 pnpm test                           # node --test over src/**/*.test.ts
 EKTO_PG_URL=postgres://… pnpm test  # also run the Repo tests against Postgres
 pnpm format                         # Biome: fix formatting and lint
-pnpm docs:build                     # API docs with TypeDoc, in docs/api
+pnpm docs:build                     # API docs and guides with TypeDoc, in docs/api
 ```

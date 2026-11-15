@@ -10,6 +10,18 @@
   ],
   "tsconfig": "tsconfig.build.json",
   "readme": "README.md",
+  "projectDocuments": [
+    "guides/introduction/getting-started.md",
+    "guides/howtos/aggregates-and-subqueries.md",
+    "guides/howtos/constraints-and-upserts.md",
+    "guides/howtos/data-mapping-and-validation.md",
+    "guides/howtos/dynamic-queries.md",
+    "guides/howtos/self-referencing-many-to-many.md",
+    "guides/howtos/test-factories.md",
+    "guides/testing/testing-with-ekto.md"
+  ],
+  "highlightLanguages": ["bash", "js", "json", "sql", "ts", "typescript"],
+  "groupOrder": ["Introduction", "How-To's", "Testing", "*"],
   "out": "docs/api",
   "excludePrivate": true,
   "excludeInternal": true,

@@ -40,3 +40,7 @@ pnpm docs:build                  # TypeDoc → docs/api/ (git-ignored); docs:che
   on warnings. A public type that refers to an unexported helper type warns: export the helper,
   or add it to `intentionallyNotExported` if it is internal. TypeDoc does not support TypeScript
   7 yet, so `.pnpmfile.cjs` gives it TypeScript 6.0 of its own; the build stays on 7.
+- **Guides** are Markdown in `guides/`, after Ecto's guides (ex_doc extras), listed in
+  `typedoc.json` `projectDocuments` with a `title` and `group` in their frontmatter; TypeDoc
+  renders them beside the API docs. Keep their examples working: run them against a database when
+  you change them or the API they use.
