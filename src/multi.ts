@@ -39,7 +39,7 @@ import type {
   UpdateAll,
   UpdateOptions,
 } from "./repo.ts";
-import type { AnySchema } from "./schema.ts";
+import type { AnySchema, Inserted } from "./schema.ts";
 
 /** The result of a `run` function (Ecto's `{:ok, value}` / `{:error, value}`). */
 export type RunResult<T, E = unknown> =
@@ -187,7 +187,7 @@ export class Multi<DB = any, C extends Changes = {}> {
     name: N,
     input: Input<C, D>,
     options?: InsertOptions<D>,
-  ): Multi<DB, Add<C, N, D>> {
+  ): Multi<DB, Add<C, N, Inserted<D>>> {
     return this.#changeset("insert", name, input, options ?? {});
   }
 

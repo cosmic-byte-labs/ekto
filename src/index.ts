@@ -91,6 +91,7 @@ export {
   type Fields,
   getMeta,
   type Infer,
+  type Inserted,
   isSchema,
   type Loader,
   load,

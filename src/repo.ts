@@ -80,6 +80,7 @@ import {
   type AnySchema,
   getMeta,
   type Infer,
+  type Inserted,
   isSchema,
   type Loader,
   load,
@@ -97,9 +98,12 @@ import {
   type Type,
 } from "./type.ts";
 
-/** The result of a write: the written record, or the changeset with errors. */
-export type WriteResult<D extends object> =
-  | { readonly ok: true; readonly value: D }
+/**
+ * The result of a write: the written record, or the changeset with errors.
+ * An insert's record is `Inserted<D>`: its generated fields are set.
+ */
+export type WriteResult<D extends object, V = D> =
+  | { readonly ok: true; readonly value: V }
   | { readonly ok: false; readonly changeset: Changeset<D> };
 
 interface ReturningOptions<D> {
@@ -301,12 +305,12 @@ export interface Repo<DB = any> {
   insert<D extends object>(
     input: Changeset<D> | D,
     options?: InsertOptions<D>,
-  ): Promise<WriteResult<D>>;
+  ): Promise<WriteResult<D, Inserted<D>>>;
   /** Like `insert`, but throws `InvalidChangesetError` instead of returning an error. */
   insertOrThrow<D extends object>(
     input: Changeset<D> | D,
     options?: InsertOptions<D>,
-  ): Promise<D>;
+  ): Promise<Inserted<D>>;
 
   /**
    * Updates the changes of a changeset by primary key (Ecto's
@@ -328,11 +332,11 @@ export interface Repo<DB = any> {
   insertOrUpdate<D extends object>(
     changeset: Changeset<D>,
     options?: InsertOptions<D> & UpdateOptions<D>,
-  ): Promise<WriteResult<D>>;
+  ): Promise<WriteResult<D, Inserted<D>>>;
   insertOrUpdateOrThrow<D extends object>(
     changeset: Changeset<D>,
     options?: InsertOptions<D> & UpdateOptions<D>,
-  ): Promise<D>;
+  ): Promise<Inserted<D>>;
 
   /** Deletes a record or a changeset's record by primary key (Ecto's `Repo.delete/2`). */
   delete<D extends object>(

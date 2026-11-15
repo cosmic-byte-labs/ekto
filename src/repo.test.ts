@@ -219,7 +219,15 @@ describe("Repo on Postgres", { skip: skipWithoutPg }, () => {
       const user = await Repo.insertOrThrow(
         User.new({ email: "bob@example.com", age: 30 }),
       );
+      // What the database or ekto generates is set on the inserted record.
+      type _id = Expect<Equal<typeof user.id, number>>;
+      type _token = Expect<Equal<typeof user.token, string>>;
+      type _at = Expect<Equal<typeof user.inserted_at, Date>>;
+      type _name = Expect<Equal<typeof user.name, string | null>>;
       assert.equal(user.id, 1);
+      const result = await Repo.insert(User.new({ email: "c@example.com" }));
+      assert.ok(result.ok);
+      type _ok = Expect<Equal<typeof result.value.id, number>>;
       const loaded = await Repo.getOrThrow(User, 1);
       assert.equal(loaded.email, "bob@example.com");
       assert.equal(loaded.age, 30);
