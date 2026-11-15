@@ -81,6 +81,15 @@ describe("parseAttrs (mix phx.gen.schema attributes)", () => {
     assert.match(schema, /export const Post = schema\("posts", \{/);
     assert.match(schema, /cast\(post, attrs, \["title"\]\)/, "no references");
     const migration = migrationSource(spec);
+    assert.match(
+      migration,
+      /m\.create\(table\("posts"\), \(t\) => \{\n\s+t\.add\("id", "bigserial", \{ primaryKey: true \}\);/,
+      "the id is explicit",
+    );
+    assert.match(
+      migrationSource({ ...spec, binaryId: true }),
+      /t\.add\("id", "uuid", \{ primaryKey: true \}\);/,
+    );
     assert.match(migration, /t\.add\("user_id", references\("users"\)\);/);
     assert.match(migration, /m\.create\(index\("posts", \["user_id"\]\)\);/);
     const kysely = kyselyMigrationSource(spec, postgres());

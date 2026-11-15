@@ -31,6 +31,7 @@ const makeMigrations = (suffix: string): Migrations => ({
   "20260101000000_create_users": migration({
     change(m) {
       m.create(table(users(suffix)), (t) => {
+        t.add("id", "bigserial", { primaryKey: true });
         t.add("email", "string", { null: false });
         t.timestamps();
       });
@@ -40,6 +41,7 @@ const makeMigrations = (suffix: string): Migrations => ({
   "20260102000000_create_posts": migration({
     change(m) {
       m.create(table(posts(suffix)), (t) => {
+        t.add("id", "bigserial", { primaryKey: true });
         t.add("title", "string");
         t.add("user_id", references(users(suffix), { onDelete: "deleteAll" }));
       });
@@ -172,7 +174,7 @@ function suite(adapter: Adapter, connect: () => AnyKysely) {
     const m = migrator({
       "20260104000000_broken": migration({
         up(m) {
-          m.create(table("mig_failed"));
+          m.create(table("mig_failed"), (t) => t.add("id", "integer"));
           m.execute("SELECT * FROM no_such_table");
         },
       }),
@@ -191,7 +193,7 @@ function suite(adapter: Adapter, connect: () => AnyKysely) {
         disableDdlTransaction: true,
         disableMigrationLock: true,
         up(m) {
-          m.create(table("mig_failed"));
+          m.create(table("mig_failed"), (t) => t.add("id", "integer"));
           m.execute("SELECT * FROM no_such_table");
         },
       }),

@@ -56,43 +56,21 @@ export interface ModifyOptions extends ColumnOptions {
 export interface Table {
   readonly kind: "table";
   readonly name: string;
-  /** The primary key `create` adds, or `null` for none. */
-  readonly primaryKey: {
-    readonly name: string;
-    readonly type: ColumnType;
-  } | null;
   /** Appended to `CREATE TABLE` (e.g. `"STRICT"` on SQLite). */
   readonly options: string | undefined;
 }
 
 export interface TableOptions {
-  /**
-   * The primary key column `create` adds: `id bigserial` by default, `false`
-   * for none (Ecto's `:primary_key`).
-   */
-  readonly primaryKey?:
-    | boolean
-    | { readonly name?: string; readonly type?: ColumnType };
   readonly options?: string;
 }
 
-/** A table, for `create`, `alter`, `drop` and `rename` (Ecto's `table/2`). */
+/**
+ * A table, for `create`, `alter`, `drop` and `rename` (Ecto's `table/2`).
+ * Unlike Ecto, `create` adds no `id` column: the primary key is declared
+ * like any other column, as schemas declare it.
+ */
 export function table(name: string, options: TableOptions = {}): Table {
-  const { primaryKey = true } = options;
-  return Object.freeze({
-    kind: "table",
-    name,
-    primaryKey:
-      primaryKey === false
-        ? null
-        : {
-            name: (primaryKey === true ? undefined : primaryKey.name) ?? "id",
-            type:
-              (primaryKey === true ? undefined : primaryKey.type) ??
-              "bigserial",
-          },
-    options: options.options,
-  });
+  return Object.freeze({ kind: "table", name, options: options.options });
 }
 
 export interface Index {
@@ -480,10 +458,6 @@ export function record(
     fn: ((t: TableBuilder) => void) | undefined,
   ) => {
     const { builder, changes } = tableBuilder(true);
-    if (table.primaryKey)
-      builder.add(table.primaryKey.name, table.primaryKey.type, {
-        primaryKey: true,
-      });
     fn?.(builder);
     commands.push({ command, object: table, columns: changes });
   };
@@ -735,6 +709,7 @@ export class MigrationError extends Error {
  * export default migration({
  *   change(m) {
  *     m.create(table("users"), (t) => {
+ *       t.add("id", "bigserial", { primaryKey: true });
  *       t.add("email", "string", { null: false });
  *       t.timestamps();
  *     });

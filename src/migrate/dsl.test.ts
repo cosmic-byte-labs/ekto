@@ -19,22 +19,19 @@ import {
 const commands = (fn: (m: MigrationContext) => void) => record("up", fn);
 
 describe("migration objects", () => {
-  test("table defaults to an id bigserial primary key", () => {
-    assert.deepEqual(table("users").primaryKey, {
-      name: "id",
-      type: "bigserial",
+  test("create adds no implicit id: the primary key is a column", () => {
+    assert.deepEqual(table("users"), {
+      kind: "table",
+      name: "users",
+      options: undefined,
     });
-    assert.equal(table("users", { primaryKey: false }).primaryKey, null);
-    assert.deepEqual(
-      table("users", { primaryKey: { name: "uuid", type: "uuid" } }).primaryKey,
-      { name: "uuid", type: "uuid" },
+    const [command] = commands((m) =>
+      m.create(table("users"), (t) => t.add("email", "string")),
     );
+    assert.ok(command?.command === "create" && "columns" in command);
     assert.deepEqual(
-      table("users", { primaryKey: { type: "serial" } }).primaryKey,
-      {
-        name: "id",
-        type: "serial",
-      },
+      command.columns.map((c) => c.name),
+      ["email"],
     );
   });
 
@@ -73,6 +70,7 @@ describe("recording", () => {
   test("create adds the primary key, columns and timestamps", () => {
     const [create] = commands((m) =>
       m.create(table("users"), (t) => {
+        t.add("id", "bigserial", { primaryKey: true });
         t.add("email", "string", { null: false });
         t.add("org_id", references("orgs"));
         t.timestamps();
@@ -99,7 +97,7 @@ describe("recording", () => {
 
   test("timestamps options", () => {
     const [create] = commands((m) =>
-      m.create(table("t", { primaryKey: false }), (t) =>
+      m.create(table("t"), (t) =>
         t.timestamps({
           type: "utc_datetime_msec",
           insertedAt: "created_at",

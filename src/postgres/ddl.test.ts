@@ -24,6 +24,7 @@ describe("PostgreSQL DDL", () => {
     assert.deepEqual(
       ddl((m) =>
         m.create(table("posts"), (t) => {
+          t.add("id", "bigserial", { primaryKey: true });
           t.add("name", "string", { default: "Hello", null: false });
           t.add("token", "binary", { size: 20, null: false });
           t.add("price", "numeric", {
@@ -55,7 +56,7 @@ describe("PostgreSQL DDL", () => {
     assert.deepEqual(
       ddl((m) => {
         m.createIfNotExists(
-          table("posts", { primaryKey: false, options: "WITH FOO=BAR" }),
+          table("posts", { options: "WITH FOO=BAR" }),
           (t) => {
             t.add("a", "integer", { primaryKey: true });
             t.add("b", "integer", { primaryKey: true });
@@ -258,7 +259,7 @@ describe("PostgreSQL DDL", () => {
   test("types", () => {
     assert.deepEqual(
       ddl((m) =>
-        m.create(table("t", { primaryKey: false }), (t) => {
+        m.create(table("t"), (t) => {
           t.add("a", "uuid");
           t.add("b", "utc_datetime_msec");
           t.add("c", "utc_datetime_msec", { precision: 3 });

@@ -95,6 +95,7 @@ function suite(adapter: Adapter, connect: () => AnyKysely) {
     const m = define({
       change(m) {
         m.create(table("mi_posts"), (t) => {
+          t.add("id", "bigserial", { primaryKey: true });
           t.add("title", "string", { null: false });
           t.add("slug", "string");
         });
@@ -140,8 +141,11 @@ function suite(adapter: Adapter, connect: () => AnyKysely) {
   test("references: on delete", async () => {
     const m = define({
       change(m) {
-        m.create(table("mi_parents"));
+        m.create(table("mi_parents"), (t) =>
+          t.add("id", "bigserial", { primaryKey: true }),
+        );
         m.create(table("mi_children"), (t) => {
+          t.add("id", "bigserial", { primaryKey: true });
           t.add(
             "cascade_id",
             references("mi_parents", { onDelete: "deleteAll" }),
@@ -159,6 +163,7 @@ function suite(adapter: Adapter, connect: () => AnyKysely) {
           );
         });
         m.create(table("mi_restricted"), (t) => {
+          t.add("id", "bigserial", { primaryKey: true });
           t.add(
             "parent_id",
             references("mi_parents", { onDelete: "restrict" }),
@@ -273,6 +278,7 @@ function suite(adapter: Adapter, connect: () => AnyKysely) {
     const m0 = define({
       change(m) {
         m.create(table("mi_remove"), (t) => {
+          t.add("id", "bigserial", { primaryKey: true });
           t.add("keep", "string");
           t.add("gone", "string", { size: 40 });
         });
@@ -342,7 +348,7 @@ function suite(adapter: Adapter, connect: () => AnyKysely) {
   test("timestamps and composite primary keys", async () => {
     const m = define({
       change(m) {
-        m.create(table("mi_pairs", { primaryKey: false }), (t) => {
+        m.create(table("mi_pairs"), (t) => {
           t.add("a", "integer", { primaryKey: true });
           t.add("b", "integer", { primaryKey: true });
           t.timestamps();

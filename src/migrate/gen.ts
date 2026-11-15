@@ -413,8 +413,8 @@ export function schemaName(table: string): string {
 /** The commands of the schema's migration (as `migrationSource` writes them). */
 function migrationCommands(spec: SchemaSpec): Command[] {
   return record("up", (m) => {
-    m.create(table(spec.table, { primaryKey: !spec.binaryId }), (t) => {
-      if (spec.binaryId) t.add("id", "uuid", { primaryKey: true });
+    m.create(table(spec.table), (t) => {
+      t.add("id", spec.binaryId ? "uuid" : "bigserial", { primaryKey: true });
       for (const a of spec.attrs) t.add(a.name, a.column);
       t.timestamps();
     });
@@ -430,10 +430,8 @@ export function migrationSource(spec: SchemaSpec): string {
   checkSpec(spec);
   const tbl = JSON.stringify(spec.table);
   const lines = [
-    `    m.create(table(${tbl}${spec.binaryId ? ", { primaryKey: false }" : ""}), (t) => {`,
-    ...(spec.binaryId
-      ? ['      t.add("id", "uuid", { primaryKey: true });']
-      : []),
+    `    m.create(table(${tbl}), (t) => {`,
+    `      t.add("id", ${spec.binaryId ? '"uuid"' : '"bigserial"'}, { primaryKey: true });`,
     ...spec.attrs.map(
       (a) => `      t.add(${JSON.stringify(a.name)}, ${a.columnSource});`,
     ),

@@ -24,6 +24,7 @@ describe("SQLite DDL", () => {
     assert.deepEqual(
       ddl((m) =>
         m.create(table("posts"), (t) => {
+          t.add("id", "bigserial", { primaryKey: true });
           t.add("name", "string", { default: "Hello", null: false });
           t.add("price", "decimal", { precision: 8, scale: 2 });
           t.add("on_hand", "integer", { default: 0, null: true });
@@ -57,13 +58,10 @@ describe("SQLite DDL", () => {
   test("composite primary keys and options", () => {
     assert.deepEqual(
       ddl((m) =>
-        m.createIfNotExists(
-          table("t", { primaryKey: false, options: "STRICT" }),
-          (t) => {
-            t.add("a", "integer", { primaryKey: true });
-            t.add("b", "integer", { primaryKey: true });
-          },
-        ),
+        m.createIfNotExists(table("t", { options: "STRICT" }), (t) => {
+          t.add("a", "integer", { primaryKey: true });
+          t.add("b", "integer", { primaryKey: true });
+        }),
       ),
       [
         'CREATE TABLE IF NOT EXISTS "t" ("a" INTEGER, "b" INTEGER, PRIMARY KEY ("a","b")) STRICT',
@@ -71,7 +69,9 @@ describe("SQLite DDL", () => {
     );
     assert.deepEqual(
       ddl((m) =>
-        m.create(table("t", { primaryKey: { name: "uuid", type: "uuid" } })),
+        m.create(table("t"), (t) =>
+          t.add("uuid", "uuid", { primaryKey: true }),
+        ),
       ),
       ['CREATE TABLE "t" ("uuid" TEXT PRIMARY KEY)'],
     );

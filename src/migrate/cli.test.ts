@@ -87,7 +87,10 @@ export default () => ({
       `import { migration, table } from ${url("dsl.ts")};
 export default migration({
   change(m) {
-    m.create(table("users"), (t) => t.add("email", "string"));
+    m.create(table("users"), (t) => {
+      t.add("id", "bigserial", { primaryKey: true });
+      t.add("email", "string");
+    });
   },
 });
 `,

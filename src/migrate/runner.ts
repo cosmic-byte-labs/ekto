@@ -184,7 +184,7 @@ export function createMigrator(options: MigratorOptions): EktoMigrator {
       db,
       adapter,
       record("up", (m) =>
-        m.createIfNotExists(table(source, { primaryKey: false }), (t) => {
+        m.createIfNotExists(table(source), (t) => {
           t.add("version", "bigint", { primaryKey: true });
           t.add("inserted_at", "utc_datetime");
         }),
