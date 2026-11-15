@@ -84,19 +84,61 @@ export class Executor<DB = unknown> {
   readonly #onQuery: ((event: QueryEvent) => void) | undefined;
   /** 0 outside a transaction, 1 in one, more in savepoints. */
   readonly #depth: number;
+  /**
+   * The depth that counts as "not in a transaction": 1 in the test sandbox,
+   * whose transaction is invisible to the code under test.
+   */
+  readonly #base: number;
 
   constructor(
     db: Kysely<DB>,
     onQuery?: (event: QueryEvent) => void,
     depth = 0,
+    base = 0,
   ) {
     this.db = db;
     this.#onQuery = onQuery;
     this.#depth = depth;
+    this.#base = base;
   }
 
   get inTransaction(): boolean {
-    return this.#depth > 0;
+    return this.#depth > this.#base;
+  }
+
+  /**
+   * Starts a transaction, or a savepoint when this executor is already in
+   * one, and returns an executor on it with the function that ends it:
+   * `end(true)` commits (or releases the savepoint), `end(false)` rolls
+   * back. With `sandbox`, the new executor reports no transaction, as code
+   * in Ecto's SQL sandbox sees none.
+   */
+  async begin(
+    sandbox = false,
+  ): Promise<{ executor: Executor<DB>; end: (ok: boolean) => Promise<void> }> {
+    const depth = this.#depth + 1;
+    const base = sandbox ? depth : this.#base;
+    if (this.#depth === 0) {
+      const trx = await this.db.startTransaction().execute();
+      return {
+        executor: new Executor(trx, this.#onQuery, depth, base),
+        end: async (ok) => {
+          await (ok ? trx.commit() : trx.rollback()).execute();
+        },
+      };
+    }
+    const name = `ekto_savepoint_${depth}`;
+    const trx = this.db as ControlledTransaction<DB>;
+    const savepoint = await trx.savepoint(name).execute();
+    return {
+      executor: new Executor(savepoint, this.#onQuery, depth, base),
+      end: async (ok) => {
+        await (ok
+          ? savepoint.releaseSavepoint(name)
+          : savepoint.rollbackToSavepoint(name)
+        ).execute();
+      },
+    };
   }
 
   /**
@@ -146,27 +188,10 @@ export class Executor<DB = unknown> {
     fn: (executor: Executor<DB>) => Promise<T>,
     commit: (result: T) => boolean,
   ): Promise<T> {
-    const depth = this.#depth + 1;
-    let done: (ok: boolean) => Promise<unknown>;
-    let handle: Kysely<DB>;
-    if (this.#depth === 0) {
-      const trx = await this.db.startTransaction().execute();
-      handle = trx;
-      done = (ok) => (ok ? trx.commit() : trx.rollback()).execute();
-    } else {
-      const name = `ekto_savepoint_${depth}`;
-      const trx = this.db as ControlledTransaction<DB>;
-      const savepoint = await trx.savepoint(name).execute();
-      handle = savepoint;
-      done = (ok) =>
-        (ok
-          ? savepoint.releaseSavepoint(name)
-          : savepoint.rollbackToSavepoint(name)
-        ).execute();
-    }
+    const { executor, end: done } = await this.begin();
     let result: T;
     try {
-      result = await fn(new Executor(handle, this.#onQuery, depth));
+      result = await fn(executor);
     } catch (error) {
       try {
         await done(false);

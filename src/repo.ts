@@ -533,6 +533,26 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
   return bind(config.adapter, new Executor(config.db, config.onQuery)).repo;
 }
 
+// biome-ignore lint/suspicious/noExplicitAny: Repos over any database type
+const executors = new WeakMap<Repo<any>, Executor<any>>();
+
+/**
+ * Starts the test sandbox's transaction on `repo` (for `ekto/testing`, not
+ * exported from `ekto`): returns a Repo on it, which reports no
+ * transaction and turns its own transactions into savepoints, and the
+ * function ending it.
+ */
+export async function checkoutSandbox<DB>(repo: Repo<DB>): Promise<{
+  readonly repo: Repo<DB>;
+  readonly end: (ok: boolean) => Promise<void>;
+}> {
+  const executor = executors.get(repo) as Executor<DB> | undefined;
+  if (executor === undefined)
+    throw new TypeError("expected a Repo created with createRepo");
+  const { executor: sandboxed, end } = await executor.begin(true);
+  return { repo: bind(repo.adapter, sandboxed).repo, end };
+}
+
 /** A Repo running on one executor: the root, a transaction or a savepoint. */
 function bind<DB>(
   adapter: Adapter,
@@ -1708,6 +1728,7 @@ function bind<DB>(
     load: ((schema: AnySchema, row: Values) =>
       load(schema, row, loader)) as Repo["load"],
   };
+  executors.set(repo, executor);
   return { repo: Object.freeze(repo), applyWrite };
 }
 

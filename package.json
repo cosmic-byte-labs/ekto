@@ -24,6 +24,10 @@
     "./migrate": {
       "types": "./dist/migrate/index.d.ts",
       "default": "./dist/migrate/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
     }
   },
   "bin": {
