@@ -1729,7 +1729,8 @@ function isRawBuilder(value: unknown): value is RawBuilder<unknown> {
   );
 }
 
-function constraintMatches(declared: Constraint, name: string): boolean {
+function constraintMatches(declared: Constraint, name: string | null): boolean {
+  if (name === null) return false;
   const { constraint, match } = declared;
   if (constraint instanceof RegExp) return constraint.test(name);
   if (match === "suffix") return name.endsWith(constraint);

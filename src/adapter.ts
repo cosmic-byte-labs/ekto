@@ -43,8 +43,12 @@ export interface Adapter {
 /** A constraint the database reported as violated. */
 export interface ConstraintViolation {
   readonly type: ConstraintType;
-  /** The constraint name. */
-  readonly constraint: string;
+  /**
+   * The constraint name, or `null` when the database does not report it
+   * (SQLite foreign keys). A violation without a name matches no declared
+   * constraint, so it is always thrown as a `ConstraintError`.
+   */
+  readonly constraint: string | null;
 }
 
 /** The rows a query returned and the number of rows it affected. */

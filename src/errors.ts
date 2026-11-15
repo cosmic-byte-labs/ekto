@@ -106,12 +106,13 @@ export class MultiplePrimaryKeyError extends Error {
  */
 export class ConstraintError extends Error {
   readonly type: ConstraintType;
-  readonly constraint: string;
+  /** The constraint name, or `null` when the database did not report it. */
+  readonly constraint: string | null;
 
   constructor(
     action: string,
     type: ConstraintType,
-    constraint: string,
+    constraint: string | null,
     changeset: AnyChangeset | undefined,
   ) {
     const fn = constraintFunction(type);
