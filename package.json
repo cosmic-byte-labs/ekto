@@ -12,6 +12,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./postgres": {
+      "types": "./dist/postgres/index.d.ts",
+      "default": "./dist/postgres/index.js"
+    },
+    "./sqlite": {
+      "types": "./dist/sqlite/index.d.ts",
+      "default": "./dist/sqlite/index.js"
     }
   },
   "files": [
@@ -31,6 +39,10 @@
   "devDependencies": {
     "@biomejs/biome": "2.6.7",
     "@types/node": "^26.6.6",
+    "kysely": "0.29.9",
     "typescript": "^7.0.2"
+  },
+  "peerDependencies": {
+    "kysely": "~0.29.9"
   }
 }

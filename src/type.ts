@@ -53,9 +53,9 @@ export type CastResult<T> =
  * A field type. Implement this for custom types; the built-in types below
  * follow the same interface.
  */
-export interface Type<T> {
+export interface Type<T, P extends PrimitiveType = PrimitiveType> {
   /** The primitive type the adapter stores this type as (Ecto's `type/0`). */
-  readonly type: PrimitiveType;
+  readonly type: P;
   cast(value: unknown): CastResult<T>;
   load(value: unknown): CastResult<T>;
   dump(value: unknown): CastResult<unknown>;
@@ -244,7 +244,7 @@ function sameInteger(value: unknown): CastResult<number> {
 }
 
 /** Integer primary keys (Ecto's `:id`). */
-export const id: Type<number> = {
+export const id: Type<number, "id"> = {
   type: "id",
   cast: castInteger,
   load: sameInteger,
@@ -252,7 +252,7 @@ export const id: Type<number> = {
   equal: Object.is,
 };
 
-export const integer: Type<number> = {
+export const integer: Type<number, "integer"> = {
   type: "integer",
   cast: castInteger,
   load: sameInteger,
@@ -266,7 +266,7 @@ function sameFloat(value: unknown): CastResult<number> {
     : error();
 }
 
-export const float: Type<number> = {
+export const float: Type<number, "float"> = {
   type: "float",
   cast: (value) => {
     if (typeof value === "string")
@@ -282,7 +282,7 @@ export const float: Type<number> = {
  * Arbitrary-precision decimals, kept as strings so no precision is lost and no
  * decimal library is required. Numbers are accepted and converted.
  */
-export const decimal: Type<string> = {
+export const decimal: Type<string, "decimal"> = {
   type: "decimal",
   cast: sameDecimal,
   load: sameDecimal,
@@ -351,7 +351,7 @@ function sameBoolean(value: unknown): CastResult<boolean> {
   return typeof value === "boolean" ? ok(value) : error();
 }
 
-export const boolean: Type<boolean> = {
+export const boolean: Type<boolean, "boolean"> = {
   type: "boolean",
   cast: (value) => {
     if (value === "true" || value === "1") return ok(true);
@@ -367,7 +367,7 @@ function sameString(value: unknown): CastResult<string> {
   return typeof value === "string" ? ok(value) : error();
 }
 
-export const string: Type<string> = {
+export const string: Type<string, "string"> = {
   type: "string",
   cast: sameString,
   load: sameString,
@@ -380,7 +380,7 @@ function sameBinary(value: unknown): CastResult<Uint8Array> {
 }
 
 /** Raw bytes (`bytea` / `BLOB`). */
-export const binary: Type<Uint8Array> = {
+export const binary: Type<Uint8Array, "binary"> = {
   type: "binary",
   cast: sameBinary,
   load: sameBinary,
@@ -393,7 +393,7 @@ function sameMap(value: unknown): CastResult<Record<string, unknown>> {
 }
 
 /** A JSON object (Ecto's `:map`). */
-export const map: Type<Record<string, unknown>> = {
+export const map: Type<Record<string, unknown>, "map"> = {
   type: "map",
   cast: sameMap,
   load: sameMap,
@@ -401,7 +401,7 @@ export const map: Type<Record<string, unknown>> = {
 };
 
 /** Any value, passed through unchanged (Ecto's `:any`). */
-export const any: Type<unknown> = {
+export const any: Type<unknown, "any"> = {
   type: "any",
   cast: ok,
   load: ok,
@@ -426,7 +426,7 @@ function encodeUuid(bytes: Uint8Array): string {
 }
 
 /** UUIDs as lowercase hyphenated strings (Ecto.UUID). */
-export const uuid: Type<string> = {
+export const uuid: Type<string, "uuid"> = {
   type: "uuid",
   cast: castUuid,
   load: castUuid,
@@ -521,7 +521,7 @@ function sameDate(value: unknown): CastResult<string> {
 }
 
 /** Calendar dates as `"YYYY-MM-DD"` strings (Ecto's `:date`). */
-export const date: Type<string> = {
+export const date: Type<string, "date"> = {
   type: "date",
   cast: castDate,
   load: sameDate,
@@ -548,7 +548,7 @@ function sameTime(value: unknown): CastResult<string> {
 }
 
 /** Times of day as `"HH:MM:SS"` strings, without fractional seconds (Ecto's `:time`). */
-export const time: Type<string> = {
+export const time: Type<string, "time"> = {
   type: "time",
   cast: castTime,
   load: sameTime,
@@ -636,7 +636,7 @@ function dumpUtcDatetime(value: unknown): CastResult<unknown> {
 }
 
 /** Points in time as `Date`s, truncated to whole seconds (Ecto's `:utc_datetime`). */
-export const utcDatetime: Type<Date> = {
+export const utcDatetime: Type<Date, "utc_datetime"> = {
   type: "utc_datetime",
   cast: (value) => castUtcDatetime(value, true),
   load: (value) => {
@@ -650,7 +650,7 @@ export const utcDatetime: Type<Date> = {
  * Points in time as `Date`s with millisecond precision, the most a JS `Date`
  * holds (Ecto's `:utc_datetime_usec` has microseconds).
  */
-export const utcDatetimeMsec: Type<Date> = {
+export const utcDatetimeMsec: Type<Date, "utc_datetime_msec"> = {
   type: "utc_datetime_msec",
   cast: (value) => castUtcDatetime(value, false),
   load: sameDatetime,
@@ -660,12 +660,15 @@ export const utcDatetimeMsec: Type<Date> = {
 // Parameterized types ------------------------------------------------------------
 
 /** The type returned by `array`; `of` is the element type. */
-export interface ArrayType<T> extends Type<T[]> {
-  readonly of: Type<T>;
+export interface ArrayType<T, P extends PrimitiveType = PrimitiveType>
+  extends Type<T[], readonly ["array", P]> {
+  readonly of: Type<T, P>;
 }
 
 /** A list of values of one type (Ecto's `{:array, type}`). */
-export function array<T>(of: Type<T>): ArrayType<T> {
+export function array<T, P extends PrimitiveType>(
+  of: Type<T, P>,
+): ArrayType<T, P> {
   const each =
     (fn: (value: unknown) => CastResult<unknown>) =>
     (value: unknown): CastResult<T[]> => {
@@ -681,7 +684,7 @@ export function array<T>(of: Type<T>): ArrayType<T> {
       return ok(out as T[]);
     };
   return {
-    type: ["array", of.type],
+    type: ["array", of.type] as const,
     of,
     cast: each((v) => of.cast(v)),
     load: each((v) => of.load(v)),
@@ -693,7 +696,7 @@ export function array<T>(of: Type<T>): ArrayType<T> {
 }
 
 /** A string limited to the given values, stored as a string (Ecto.Enum). */
-export interface EnumType<V extends string> extends Type<V> {
+export interface EnumType<V extends string> extends Type<V, "string"> {
   readonly values: readonly V[];
 }
 

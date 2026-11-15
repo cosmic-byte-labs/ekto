@@ -1,10 +1,20 @@
 // Public entry point of ekto.
 
 export * from "./changeset.ts";
+export type {
+  DriverTypes,
+  DriverValue,
+  DriverValueOf,
+  KyselyColumn,
+  KyselyTable,
+  KyselyTables,
+} from "./kysely.ts";
 export {
   type AnyField,
   type AnySchema,
+  type DefaultFlags,
   Field,
+  type FieldFlags,
   type FieldName,
   type FieldOptions,
   type Fields,

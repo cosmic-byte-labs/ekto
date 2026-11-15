@@ -181,6 +181,9 @@ importers:
       '@types/node':
         specifier: ^26.6.6
         version: 26.6.6
+      kysely:
+        specifier: 0.29.9
+        version: 0.29.9
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -379,6 +382,10 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  kysely@0.29.9:
+    resolution: {integrity: sha512-K48ErswC3MlIcBqR0pYIIEl+n9rIgwxgzaM1FxKHMXn7egxr1NHj7bCeF98mXl9A3/QoL5I7mo5S/mLXgeDgGA==}
+    engines: {node: '>=22.0.0'}
+
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
     engines: {node: '>=16.20.0'}
@@ -495,6 +502,8 @@ snapshots:
 
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
+
+  kysely@0.29.9: {}
 
   typescript@7.0.2:
     optionalDependencies:
