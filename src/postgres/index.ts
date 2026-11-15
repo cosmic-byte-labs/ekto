@@ -6,6 +6,7 @@ import { type Kysely, sql } from "kysely";
 import type { Adapter, ConstraintViolation } from "../adapter.ts";
 import type { ConstraintType } from "../changeset.ts";
 import type { DriverValue, KyselyTables } from "../kysely.ts";
+import { MigrationError } from "../migrate/dsl.ts";
 import type { AnySchema } from "../schema.ts";
 import { quoteIdentifierAnsi, type SqlSyntax } from "../sql.ts";
 import type { PrimitiveType } from "../type.ts";
@@ -240,11 +241,15 @@ export function postgres(): Adapter {
   });
 }
 
+/** How long the migrations wait for a second connection while the lock holds one. */
+const MIGRATION_CONNECTION_WAIT = 2000;
+
 /**
  * Ecto's `:table_lock` strategy: a transaction on its own connection locks
  * the migrations table in SHARE UPDATE EXCLUSIVE mode, which conflicts with
  * itself but not with the inserts and deletes of the migration running on
- * another connection.
+ * another connection. So the pool needs two connections: where Ecto raises
+ * for a `pool_size` of 1, this raises when no second connection comes.
  */
 async function lockForMigrations<T>(
   // biome-ignore lint/suspicious/noExplicitAny: any database
@@ -257,6 +262,18 @@ async function lockForMigrations<T>(
     await sql`LOCK TABLE ${sql.table(table)} IN SHARE UPDATE EXCLUSIVE MODE`.execute(
       trx,
     );
+    try {
+      await db.connection().execute(async () => {}, {
+        signal: AbortSignal.timeout(MIGRATION_CONNECTION_WAIT),
+      });
+    } catch (error) {
+      if ((error as Error).name !== "TimeoutError") throw error;
+      throw new MigrationError(
+        `Migrations failed to run because no second connection was available within ${MIGRATION_CONNECTION_WAIT / 1000}s: the connection pool size is probably less than 2.
+
+ekto requires a pool size of at least 2 to support concurrent migrators. When migrations run, ekto uses one connection to maintain a lock and another to run migrations. Increase the pool's max (e.g. new pg.Pool({ max: 2 })), or run without the lock (migrationLock: false, or --no-lock).`,
+      );
+    }
     const result = await fn();
     await trx.commit().execute();
     return result;

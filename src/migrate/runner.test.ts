@@ -451,6 +451,62 @@ describe("migrator on Postgres", { skip: skipWithoutPg }, () => {
   });
 });
 
+describe("migrator on a Postgres pool of one connection", {
+  skip: skipWithoutPg,
+}, () => {
+  if (skipWithoutPg) return;
+  const source = "mig_schema_migrations_pool";
+  const migrations: Migrations = {
+    "1_noop": migration({
+      change(m) {
+        m.execute("SELECT 1", "SELECT 1");
+      },
+    }),
+  };
+  let db: AnyKysely;
+  before(() => {
+    db = connectPg({ max: 1 }).db;
+  });
+  after(async () => {
+    await sql.raw(`DROP TABLE IF EXISTS "${source}"`).execute(db);
+    await db.destroy();
+  });
+
+  test("raises when the pool is too small for the lock (Ecto's pool_size check)", async () => {
+    const m = createMigrator({
+      db,
+      adapter: postgres(),
+      migrations,
+      migrationSource: source,
+    });
+    await assert.rejects(m.migrate(), (error: unknown) => {
+      assert.ok(error instanceof MigrationError);
+      assert.match(
+        error.message,
+        /Migrations failed to run because no second connection was available within 2s/,
+      );
+      return true;
+    });
+    assert.deepEqual(
+      (await m.status()).map((s) => s.status),
+      ["down"],
+      "nothing ran, and the pool still works",
+    );
+  });
+
+  test("does not raise without the lock", async () => {
+    const m = createMigrator({
+      db,
+      adapter: postgres(),
+      migrations,
+      migrationSource: source,
+      migrationLock: false,
+    });
+    assert.deepEqual(versions(await m.migrate()), [1]);
+    assert.deepEqual(versions(await m.rollback()), [1]);
+  });
+});
+
 describe("fileMigrations", () => {
   let dir: string;
   before(async () => {

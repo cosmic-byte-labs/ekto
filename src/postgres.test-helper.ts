@@ -13,10 +13,13 @@ export const pgUrl: string | undefined = process.env.EKTO_PG_URL;
 export const skipWithoutPg: string | false =
   pgUrl === undefined ? "set EKTO_PG_URL to run Postgres tests" : false;
 
-export function connectPg<DB>(): { db: Kysely<DB>; pool: pg.Pool } {
+export function connectPg<DB>({ max = 4 }: { max?: number } = {}): {
+  db: Kysely<DB>;
+  pool: pg.Pool;
+} {
   const pool = new pg.Pool({
     connectionString: pgUrl,
-    max: 4,
+    max,
     types: utcTimestamps(pg.types),
   });
   const db = new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });

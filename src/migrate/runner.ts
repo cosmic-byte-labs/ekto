@@ -37,7 +37,8 @@ export interface MigratorOptions {
   /**
    * Whether to lock while migrating so that two migrators never run the
    * same migration, `true` by default (Ecto's `:migration_lock`). On
-   * PostgreSQL, the lock holds a connection, so the pool needs at least two.
+   * PostgreSQL, the lock holds a connection, so the pool needs at least two;
+   * migrations fail when no second connection comes within 2 seconds.
    */
   readonly migrationLock?: boolean;
 }
