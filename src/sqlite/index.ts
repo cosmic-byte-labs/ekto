@@ -2,8 +2,17 @@
  * SQLite support (`ekto/sqlite`), following ecto_sqlite3.
  */
 
-import Database from "better-sqlite3";
-import { type Dialect, SqliteDialect, SqliteDriver } from "kysely";
+import {
+  CompiledQuery,
+  type DatabaseConnection,
+  type Dialect,
+  type Driver,
+  type QueryResult,
+  SqliteAdapter,
+  SqliteIntrospector,
+  SqliteQueryCompiler,
+} from "kysely";
+import sqlite3 from "sqlite3";
 import type {
   Adapter,
   ConnectionOptions,
@@ -23,14 +32,14 @@ export const sqliteSyntax: SqlSyntax = Object.freeze({
 });
 
 /**
- * What better-sqlite3 (Kysely's `SqliteDialect`) returns, for the storage
- * classes ecto_sqlite3 uses: booleans are integers, dates, times and
+ * What node-sqlite3 returns, for the storage classes ecto_sqlite3 uses:
+ * integers are numbers (past 2^53 they lose precision), blobs Buffers, booleans are integers, dates, times and
  * date-times ISO 8601 text, maps and arrays JSON text, and decimals have
  * numeric affinity, so they usually come back as numbers.
  */
 export type SqliteTypes = {
-  readonly id: DriverValue<number, number | bigint>;
-  readonly integer: DriverValue<number, number | bigint>;
+  readonly id: DriverValue<number>;
+  readonly integer: DriverValue<number>;
   readonly float: DriverValue<number>;
   readonly decimal: DriverValue<number | string, number | string>;
   readonly boolean: DriverValue<number>;
@@ -60,23 +69,14 @@ export type KyselyDB<Schemas extends readonly AnySchema[]> = KyselyTables<
 const DATETIME =
   /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$/i;
 
-function loadInteger(value: unknown): unknown {
-  // better-sqlite3 returns bigints with `safeIntegers` on.
-  if (typeof value !== "bigint") return value;
-  const n = Number(value);
-  return Number.isSafeInteger(n) ? n : value;
-}
-
 // Codec.bool_decode/1.
 function loadBoolean(value: unknown): unknown {
   switch (value) {
     case 0:
-    case 0n:
     case "0":
     case "FALSE":
       return false;
     case 1:
-    case 1n:
     case "1":
     case "TRUE":
       return true;
@@ -116,11 +116,6 @@ function loadValue(type: PrimitiveType, value: unknown): unknown {
       : list;
   }
   switch (type) {
-    case "id":
-    case "integer":
-      return loadInteger(value);
-    case "float":
-      return typeof value === "bigint" ? Number(value) : value;
     case "boolean":
       return loadBoolean(value);
     case "map":
@@ -143,7 +138,7 @@ function dumpValue(type: PrimitiveType, value: unknown): unknown {
   }
   switch (type) {
     case "boolean":
-      // better-sqlite3 cannot bind booleans (Codec.bool_encode/1).
+      // Codec.bool_encode/1.
       return value === true ? 1 : value === false ? 0 : value;
     case "map":
       return typeof value === "string" ? value : JSON.stringify(value);
@@ -154,11 +149,6 @@ function dumpValue(type: PrimitiveType, value: unknown): unknown {
         : value;
     case "utc_datetime_msec":
       return value instanceof Date ? value.toISOString() : value;
-    case "binary":
-      // better-sqlite3 binds Buffers as blobs.
-      return value instanceof Uint8Array && !Buffer.isBuffer(value)
-        ? Buffer.from(value.buffer, value.byteOffset, value.byteLength)
-        : value;
     default:
       return value;
   }
@@ -182,11 +172,16 @@ function indexName(columns: string): string {
   ].join("_");
 }
 
-/** The constraint violated by a better-sqlite3 `SqliteError` (ecto_sqlite3's `to_constraints/2`). */
+/** The constraint violated by a node-sqlite3 error (ecto_sqlite3's `to_constraints/2`). */
 function toConstraints(error: unknown): readonly ConstraintViolation[] {
   if (typeof error !== "object" || error === null) return [];
-  const { message } = error as { message?: unknown };
-  if (typeof message !== "string") return [];
+  const { code, message: full } = error as {
+    code?: unknown;
+    message?: unknown;
+  };
+  if (code !== "SQLITE_CONSTRAINT" || typeof full !== "string") return [];
+  // node-sqlite3 prefixes SQLite's message with the code.
+  const message = full.replace(/^SQLITE_CONSTRAINT: /, "");
   const unique = /^UNIQUE constraint failed: (.+)$/.exec(message)?.[1];
   if (unique !== undefined) {
     // Expression indexes are reported by name: "index 'users_lower_email'".
@@ -201,10 +196,143 @@ function toConstraints(error: unknown): readonly ConstraintViolation[] {
   return [];
 }
 
+type Row = Record<string, unknown>;
+
+function all(
+  db: sqlite3.Database,
+  sql: string,
+  parameters: readonly unknown[],
+): Promise<Row[]> {
+  return new Promise((resolve, reject) =>
+    db.all(sql, parameters, (error: Error | null, rows: Row[]) =>
+      error ? reject(error) : resolve(rows),
+    ),
+  );
+}
+
+const WRITES = new Set([
+  "InsertQueryNode",
+  "UpdateQueryNode",
+  "DeleteQueryNode",
+]);
+
 /**
- * Connections to the `database` file with better-sqlite3, set up as
- * ecto_sqlite3 and Exqlite set them up: `journal_mode` WAL, a
- * `busy_timeout` of 2000 ms, and foreign keys on.
+ * Whether the statement is an insert, update or delete, whose result counts
+ * the rows it changed. Kysely's queries say so, as ecto_sqlite3 passes the
+ * command to Exqlite; raw SQL is looked at as Exqlite.Query looks at it.
+ */
+function writes({ query, sql }: CompiledQuery): boolean {
+  if (WRITES.has(query.kind)) return true;
+  return query.kind === "RawNode" && /INSERT|DELETE|UPDATE/.test(sql);
+}
+
+/** One node-sqlite3 database, as an Exqlite connection. */
+class SqliteConnection implements DatabaseConnection {
+  readonly #db: sqlite3.Database;
+
+  constructor(db: sqlite3.Database) {
+    this.#db = db;
+  }
+
+  async executeQuery<R>(compiled: CompiledQuery): Promise<QueryResult<R>> {
+    const rows = (await all(
+      this.#db,
+      compiled.sql,
+      compiled.parameters,
+    )) as R[];
+    if (!writes(compiled)) return { rows };
+    // Exqlite's num_rows for a write: sqlite3_changes(), on the same connection.
+    const [result] = await all(this.#db, "SELECT changes() AS changes", []);
+    return { rows, numAffectedRows: BigInt(result?.changes as number) };
+  }
+
+  async *streamQuery<R>(
+    compiled: CompiledQuery,
+    chunkSize = 50,
+  ): AsyncIterableIterator<QueryResult<R>> {
+    const { rows } = await this.executeQuery<R>(compiled);
+    for (let i = 0; i < rows.length; i += chunkSize)
+      yield { rows: rows.slice(i, i + chunkSize) };
+  }
+}
+
+/** A Kysely driver holding one node-sqlite3 database, as Kysely's SqliteDriver holds one. */
+class Sqlite3Driver implements Driver {
+  readonly #open: () => Promise<sqlite3.Database>;
+  #db: sqlite3.Database | undefined;
+  #connection: SqliteConnection | undefined;
+
+  constructor(open: () => Promise<sqlite3.Database>) {
+    this.#open = open;
+  }
+
+  async init(): Promise<void> {
+    this.#db = await this.#open();
+    this.#connection = new SqliteConnection(this.#db);
+  }
+
+  async acquireConnection(): Promise<DatabaseConnection> {
+    if (this.#connection === undefined)
+      throw new Error("the SQLite driver is not initialized");
+    return this.#connection;
+  }
+
+  async beginTransaction(connection: DatabaseConnection): Promise<void> {
+    await connection.executeQuery(CompiledQuery.raw("begin"));
+  }
+
+  async commitTransaction(connection: DatabaseConnection): Promise<void> {
+    await connection.executeQuery(CompiledQuery.raw("commit"));
+  }
+
+  async rollbackTransaction(connection: DatabaseConnection): Promise<void> {
+    await connection.executeQuery(CompiledQuery.raw("rollback"));
+  }
+
+  async savepoint(connection: DatabaseConnection, name: string): Promise<void> {
+    await connection.executeQuery(
+      CompiledQuery.raw(`savepoint ${quoteIdentifierAnsi(name)}`),
+    );
+  }
+
+  async rollbackToSavepoint(
+    connection: DatabaseConnection,
+    name: string,
+  ): Promise<void> {
+    await connection.executeQuery(
+      CompiledQuery.raw(`rollback to ${quoteIdentifierAnsi(name)}`),
+    );
+  }
+
+  async releaseSavepoint(
+    connection: DatabaseConnection,
+    name: string,
+  ): Promise<void> {
+    await connection.executeQuery(
+      CompiledQuery.raw(`release ${quoteIdentifierAnsi(name)}`),
+    );
+  }
+
+  async releaseConnection(): Promise<void> {}
+
+  async destroy(): Promise<void> {
+    const db = this.#db;
+    this.#db = undefined;
+    this.#connection = undefined;
+    if (db !== undefined) await close(db);
+  }
+}
+
+function close(db: sqlite3.Database): Promise<void> {
+  return new Promise((resolve, reject) =>
+    db.close((error) => (error ? reject(error) : resolve())),
+  );
+}
+
+/**
+ * Connections to the `database` file with node-sqlite3, set up as
+ * ecto_sqlite3 and Exqlite set them up: a `busy_timeout` of 2000 ms,
+ * `journal_mode` WAL, and foreign keys on.
  */
 function connect(options: ConnectionOptions, poolSize: number): Dialect {
   const {
@@ -220,35 +348,45 @@ function connect(options: ConnectionOptions, poolSize: number): Dialect {
   if (database === ":memory:" && poolSize !== 1)
     throw new TypeError("In memory databases must have a poolSize of 1");
   const open = async () => {
-    const db = new Database(database);
-    db.pragma(`journal_mode = ${journalMode}`);
-    db.pragma(`busy_timeout = ${busyTimeout}`);
-    db.pragma(`foreign_keys = ${foreignKeys ? "ON" : "OFF"}`);
+    const db = await new Promise<sqlite3.Database>((resolve, reject) => {
+      const db: sqlite3.Database = new sqlite3.Database(database, (error) =>
+        error ? reject(error) : resolve(db),
+      );
+    });
+    try {
+      for (const pragma of [
+        `busy_timeout = ${busyTimeout}`,
+        `journal_mode = ${journalMode}`,
+        `foreign_keys = ${foreignKeys ? "ON" : "OFF"}`,
+      ])
+        await all(db, `PRAGMA ${pragma}`, []);
+    } catch (error) {
+      await close(db).catch(() => {});
+      throw error;
+    }
     return db;
   };
-  const dialect = new SqliteDialect({ database: open });
   return {
-    // One better-sqlite3 database per driver, so per pooled connection.
-    createDriver: () => new SqliteDriver({ database: open }),
-    createQueryCompiler: () => dialect.createQueryCompiler(),
-    createAdapter: () => dialect.createAdapter(),
-    createIntrospector: (db) => dialect.createIntrospector(db),
+    // One node-sqlite3 database per driver, so per pooled connection.
+    createDriver: () => new Sqlite3Driver(open),
+    createQueryCompiler: () => new SqliteQueryCompiler(),
+    createAdapter: () => new SqliteAdapter(),
+    createIntrospector: (db) => new SqliteIntrospector(db),
   };
 }
 
 /**
- * The SQLite adapter, connecting with better-sqlite3 (which the application
- * installs) to the `database` file:
+ * The SQLite adapter, connecting with node-sqlite3 (the `sqlite3` package,
+ * which the application installs) to the `database` file:
  *
  * ```ts
  * const repo = createRepo<DB>({ adapter: sqlite(), database: "app.db" });
  * ```
  *
- * The pool has one connection unless `poolSize` says otherwise, where
- * ecto_sqlite3 has 5: better-sqlite3 runs queries on the event loop's
- * thread, so a connection waiting for another's write lock blocks the
- * thread for up to `busyTimeout`, and the other cannot finish its
- * transaction meanwhile. One connection queues transactions instead.
+ * The pool has 5 connections unless `poolSize` says otherwise, as
+ * ecto_sqlite3's. node-sqlite3 runs queries on libuv's thread pool, as
+ * Exqlite runs them on dirty schedulers, so a connection waiting
+ * `busyTimeout` for another's write lock does not block the event loop.
  * `":memory:"` databases must have a pool of one, as each connection would
  * open its own.
  *
@@ -263,7 +401,7 @@ export function sqlite(): Adapter {
   return Object.freeze({
     name: "sqlite",
     syntax: sqliteSyntax,
-    defaultPoolSize: 1,
+    defaultPoolSize: 5,
     connect,
     load: loadValue,
     dump: dumpValue,

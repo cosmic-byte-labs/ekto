@@ -97,7 +97,7 @@ function suite(name: string, connect: () => Repo, idType: string) {
 
 suite(
   "sandbox on SQLite",
-  () => createRepo({ adapter: sqlite(), database: ":memory:" }),
+  () => createRepo({ adapter: sqlite(), database: ":memory:", poolSize: 1 }),
   "INTEGER PRIMARY KEY AUTOINCREMENT",
 );
 
@@ -167,7 +167,7 @@ function ownership(name: string, connect: () => Repo, idType: string) {
 
 ownership(
   "withSandbox on SQLite",
-  () => createRepo({ adapter: sqlite(), database: ":memory:" }),
+  () => createRepo({ adapter: sqlite(), database: ":memory:", poolSize: 1 }),
   "INTEGER PRIMARY KEY AUTOINCREMENT",
 );
 
@@ -178,7 +178,11 @@ describe("withSandbox on Postgres", { skip: skipWithoutPg }, () => {
 
 describe("sandbox outside tests", () => {
   test("the Repo is only available in a test", () => {
-    const repo = createRepo({ adapter: sqlite(), database: ":memory:" });
+    const repo = createRepo({
+      adapter: sqlite(),
+      database: ":memory:",
+      poolSize: 1,
+    });
     const box = sandbox(repo, { beforeEach: () => {}, afterEach: () => {} });
     assert.throws(() => box.repo, /only available inside a test/);
   });

@@ -67,7 +67,8 @@ async function has(db: AnyKysely, table: string, column = "*") {
   try {
     await sql
       .raw(
-        `SELECT ${column === "*" ? "*" : `"${column}"`} FROM "${table}" LIMIT 0`,
+        // Qualified, as SQLite reads an unknown "column" as a string.
+        `SELECT ${column === "*" ? "*" : `"${table}"."${column}"`} FROM "${table}" LIMIT 0`,
       )
       .execute(db);
     return true;
@@ -347,7 +348,9 @@ function suite(connect: () => Repo) {
 }
 
 describe("migrator on SQLite", () => {
-  suite(() => createRepo({ adapter: sqlite(), database: ":memory:" }));
+  suite(() =>
+    createRepo({ adapter: sqlite(), database: ":memory:", poolSize: 1 }),
+  );
 });
 
 describe("lock for migrations", () => {
@@ -359,7 +362,7 @@ describe("lock for migrations", () => {
       return fn();
     },
   };
-  const repo = createRepo({ adapter, database: ":memory:" });
+  const repo = createRepo({ adapter, database: ":memory:", poolSize: 1 });
   const noop = (options: { disableMigrationLock?: boolean } = {}) =>
     migration({
       ...options,
@@ -517,7 +520,11 @@ describe("fileMigrations", () => {
     await writeFile(join(a, "10_ten.ts"), body);
     await writeFile(join(a, "nested", "12_twelve.ts"), body);
     await writeFile(join(b, "11_eleven.ts"), body);
-    const repo = createRepo({ adapter: sqlite(), database: ":memory:" });
+    const repo = createRepo({
+      adapter: sqlite(),
+      database: ":memory:",
+      poolSize: 1,
+    });
     try {
       const m = createMigrator({
         repo,

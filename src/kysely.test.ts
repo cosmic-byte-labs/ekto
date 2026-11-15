@@ -114,7 +114,7 @@ describe("KyselyDB", () => {
     assert.ok(true);
   });
 
-  test("SQLite columns use what better-sqlite3 returns", () => {
+  test("SQLite columns use what node-sqlite3 returns", () => {
     type _select = Expect<
       Equal<
         Selectable<Lite["users"]>,

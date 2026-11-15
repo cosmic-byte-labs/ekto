@@ -267,7 +267,7 @@ function roundTrip(name: string, connect: () => Repo) {
 }
 
 roundTrip("gen.schema on SQLite", () =>
-  createRepo({ adapter: sqlite(), database: ":memory:" }),
+  createRepo({ adapter: sqlite(), database: ":memory:", poolSize: 1 }),
 );
 
 describe("gen.schema on Postgres", { skip: skipWithoutPg }, () => {
@@ -338,7 +338,7 @@ describe("ekto gen.schema", () => {
       config,
       `import { sqlite } from ${sqliteUrl};
 export default {
-  repo: { adapter: sqlite(), database: ":memory:" },
+  repo: { adapter: sqlite(), database: ":memory:", poolSize: 1 },
   schemasFolder: ${JSON.stringify(join(folder, "schemas"))},
   migrationsFolder: ${JSON.stringify(join(folder, "migrations"))},
   binaryId: true,
@@ -484,7 +484,7 @@ function fromDatabase(
 
 fromDatabase(
   "gen.schemas on SQLite",
-  () => createRepo({ adapter: sqlite(), database: ":memory:" }),
+  () => createRepo({ adapter: sqlite(), database: ":memory:", poolSize: 1 }),
   (orgs, members) => [
     `CREATE TABLE ${orgs} (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)`,
     `CREATE TABLE ${members} (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, nickname TEXT, role TEXT NOT NULL DEFAULT 'member', org_id INTEGER REFERENCES ${orgs}(id), inserted_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,

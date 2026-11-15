@@ -36,7 +36,7 @@ transaction, migrations with an `ekto` command, and a test sandbox that rolls ba
 - Migrations with a reversible `change`, a `schema_migrations` table and a migration lock; the
   `ekto` command migrates, rolls back, reports status and generates migrations and schemas.
 - A test sandbox (`ekto/testing`) that runs each test in a transaction that is rolled back.
-- PostgreSQL (node-postgres) and SQLite (better-sqlite3), with a connection pool owned by the
+- PostgreSQL (node-postgres) and SQLite (node-sqlite3), with a connection pool owned by the
   Repo.
 
 ## Install
@@ -48,10 +48,11 @@ ekto runs on Node 22.19 or later, and needs `kysely` and the driver of your data
 pnpm add ekto kysely pg
 
 # SQLite
-pnpm add ekto kysely better-sqlite3
+pnpm add ekto kysely sqlite3
 ```
 
-`pg` and `better-sqlite3` are optional peer dependencies: install the one you use.
+`pg` and `sqlite3` are optional peer dependencies: install the one you use. `sqlite3` builds a
+native addon; pnpm asks you to approve its build (`pnpm approve-builds`).
 
 ## Quickstart
 
@@ -577,23 +578,26 @@ import { sqlite } from "ekto/sqlite";
 
 const repo = createRepo<DB>({
   adapter: sqlite(),
-  database: "app.db", // or ":memory:"
+  database: "app.db", // or ":memory:", with poolSize: 1
   journalMode: "wal", // the default
   busyTimeout: 2000, // ms, the default
   foreignKeys: true, // the default
 });
 ```
 
-The SQLite pool has one connection by default, where ecto_sqlite3 has five: better-sqlite3 runs
-queries on the main thread, so a second connection waiting for a write lock would block the
-first. One connection queues transactions instead. A `":memory:"` database must use a pool of
-one.
+The SQLite pool has five connections by default, as ecto_sqlite3's. node-sqlite3 runs queries on
+libuv's thread pool, so a connection waiting up to `busyTimeout` for another's write lock does
+not block the event loop. A `":memory:"` database must use a pool of one, as each connection
+would open its own.
+
+Adding and dropping check constraints in a migration needs SQLite 3.53, as ecto_sqlite3 says;
+`sqlite3` 6.0.1 bundles 3.52, which adds them but cannot drop them.
 
 ### Pool and other options
 
 | Option          | Default                     | Meaning                                                                |
 | --------------- | --------------------------- | ---------------------------------------------------------------------- |
-| `poolSize`      | 10 (PostgreSQL), 1 (SQLite) | Connections the Repo keeps.                                            |
+| `poolSize`      | 10 (PostgreSQL), 5 (SQLite) | Connections the Repo keeps.                                            |
 | `queueTarget`   | 50                          | How long a query should wait for a connection, in ms.                  |
 | `queueInterval` | 2000                        | The window `queueTarget` is checked in, in ms.                         |
 | `idleInterval`  | 1000                        | How often idle connections are pinged, in ms.                          |
@@ -615,7 +619,6 @@ Most names map directly (`Repo.insert` is `repo.insert`, `{:ok, user}` is `{ ok:
 - Migrations declare the primary key explicitly; `create(table(...))` adds no `id`.
 - `belongsTo` does not define the foreign key field.
 - Field names are column names; there is no `:source` renaming and no schema prefixes yet.
-- The SQLite pool defaults to one connection.
 - The sandbox is tied to a test or an async context instead of a process.
 
 ## Development

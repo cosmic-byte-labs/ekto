@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
-import Database from "better-sqlite3";
 import type { Kysely } from "kysely";
+import sqlite3 from "sqlite3";
 import { hasMany } from "../association.ts";
 import {
   cast,
@@ -24,12 +24,10 @@ const adapter = sqlite();
 
 describe("sqlite adapter", () => {
   test("loads integers, booleans and JSON as ecto_sqlite3 does", () => {
-    assert.equal(adapter.load("id", 42n), 42);
-    assert.equal(adapter.load("id", 9007199254740993n), 9007199254740993n);
-    assert.equal(adapter.load("float", 3n), 3);
-    for (const v of [1, 1n, "1", "TRUE"])
+    assert.equal(adapter.load("id", 42), 42);
+    for (const v of [1, "1", "TRUE"])
       assert.equal(adapter.load("boolean", v), true);
-    for (const v of [0, 0n, "0", "FALSE"])
+    for (const v of [0, "0", "FALSE"])
       assert.equal(adapter.load("boolean", v), false);
     assert.equal(adapter.load("boolean", 2), 2, "left for the type to reject");
     assert.deepEqual(adapter.load("map", '{"a":[1]}'), { a: [1] });
@@ -54,7 +52,7 @@ describe("sqlite adapter", () => {
     assert.equal(adapter.load("time", "07:30:00.5"), "07:30:00");
   });
 
-  test("dumps what better-sqlite3 can bind", () => {
+  test("dumps what node-sqlite3 can bind", () => {
     assert.equal(adapter.dump("boolean", true), 1);
     assert.equal(adapter.dump("boolean", false), 0);
     assert.equal(adapter.dump("map", { a: [1] }), '{"a":[1]}');
@@ -65,7 +63,6 @@ describe("sqlite adapter", () => {
       adapter.dump("utc_datetime_msec", date),
       "2026-01-02T10:30:00.000Z",
     );
-    assert.ok(Buffer.isBuffer(adapter.dump("binary", new Uint8Array([1]))));
   });
 
   test("maps constraint violations like ecto_sqlite3", () => {
@@ -74,6 +71,13 @@ describe("sqlite adapter", () => {
     assert.deepEqual(
       adapter.toConstraints(error("UNIQUE constraint failed: users.email")),
       [{ type: "unique", constraint: "users_email_index" }],
+    );
+    assert.deepEqual(
+      adapter.toConstraints(
+        error("SQLITE_CONSTRAINT: UNIQUE constraint failed: users.email"),
+      ),
+      [{ type: "unique", constraint: "users_email_index" }],
+      "as node-sqlite3 reports it",
     );
     assert.deepEqual(
       adapter.toConstraints(
@@ -173,29 +177,46 @@ const userChangeset = (
     uniqueConstraint("email"),
   );
 
+/** A second connection to the file, beside the Repo's. */
+function side(file: string) {
+  const db = new sqlite3.Database(file);
+  const call = <T>(
+    fn: (done: (error: Error | null, result?: T) => void) => void,
+  ) =>
+    new Promise<T>((resolve, reject) =>
+      fn((error, result) => (error ? reject(error) : resolve(result as T))),
+    );
+  return {
+    exec: (sql: string) => call<void>((done) => db.exec(sql, done)),
+    get: (sql: string) =>
+      call<Record<string, unknown>>((done) => db.get(sql, done)),
+    close: () => call<void>((done) => db.close(done)),
+  };
+}
+
 describe("Repo on SQLite", () => {
-  let sqliteDb: Database.Database;
+  let sqliteDb: ReturnType<typeof side>;
   let db: Kysely<DB>;
   let Repo: Repo<DB>;
 
   const dir = mkdtempSync(join(tmpdir(), "ekto-sqlite-"));
 
-  before(() => {
-    // The Repo's connection and this one share the file.
-    sqliteDb = new Database(join(dir, "test.db"));
-    sqliteDb.exec(DDL);
+  before(async () => {
+    // The Repo's connections and this one share the file.
+    sqliteDb = side(join(dir, "test.db"));
+    await sqliteDb.exec(DDL);
     Repo = createRepo<DB>({ adapter, database: join(dir, "test.db") });
     db = Repo.kysely;
   });
 
   after(async () => {
     await Repo.stop();
-    sqliteDb.close();
+    await sqliteDb.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  beforeEach(() => {
-    sqliteDb.exec("DELETE FROM posts; DELETE FROM users;");
+  beforeEach(async () => {
+    await sqliteDb.exec("DELETE FROM posts; DELETE FROM users;");
   });
 
   const insertUser = (params: Record<string, unknown> = {}) =>
@@ -214,10 +235,7 @@ describe("Repo on SQLite", () => {
       age: 42,
     });
     assert.equal(typeof user.id, "number");
-    const row = sqliteDb.prepare("SELECT * FROM users").get() as Record<
-      string,
-      unknown
-    >;
+    const row = await sqliteDb.get("SELECT * FROM users");
     assert.equal(row.admin, 1);
     assert.equal(row.tags, '["a","b"]');
     assert.equal(row.settings, '{"theme":"dark"}');

@@ -191,20 +191,22 @@ describe("a Repo's pool", () => {
   after(() => rmSync(dir, { recursive: true, force: true }));
 
   test("defaults to the adapter's size, Ecto's queue target and interval", async () => {
-    const repo = createRepo({ adapter: sqlite(), database: ":memory:" });
-    assert.equal(repo.config.poolSize, 1);
+    const repo = createRepo({
+      adapter: sqlite(),
+      database: join(dir, "defaults.db"),
+    });
+    assert.equal(repo.config.poolSize, 5, "ecto_sqlite3's");
     assert.equal(repo.config.queueTarget, 50);
     assert.equal(repo.config.queueInterval, 2000);
     assert.equal(repo.config.idleInterval, 1000);
-    assert.equal(repo.config.idleLimit, 1);
+    assert.equal(repo.config.idleLimit, 5);
     assert.equal(repo.config.maxLifetime, undefined);
     await repo.stop();
   });
 
   test("an in-memory SQLite database needs a pool of one", () => {
     assert.throws(
-      () =>
-        createRepo({ adapter: sqlite(), database: ":memory:", poolSize: 2 }),
+      () => createRepo({ adapter: sqlite(), database: ":memory:" }),
       /In memory databases must have a poolSize of 1/,
     );
   });
@@ -217,6 +219,7 @@ describe("a Repo's pool", () => {
     const repo = createRepo({
       adapter: sqlite(),
       database: join(dir, "serial.db"),
+      poolSize: 1,
     });
     await sql`CREATE TABLE log (n INTEGER)`.execute(repo.kysely);
     const run = (n: number) =>
@@ -236,8 +239,34 @@ describe("a Repo's pool", () => {
     await repo.stop();
   });
 
+  test("SQLite connections wait for the write lock without blocking the others", async () => {
+    const repo = createRepo({
+      adapter: sqlite(),
+      database: join(dir, "concurrent.db"),
+    });
+    await sql`CREATE TABLE log (n INTEGER)`.execute(repo.kysely);
+    const run = (n: number) =>
+      repo.kysely.transaction().execute(async (trx) => {
+        await sql`INSERT INTO log (n) VALUES (${n})`.execute(trx);
+        await sleep(20);
+        await sql`INSERT INTO log (n) VALUES (${n})`.execute(trx);
+      });
+    // The second waits up to busyTimeout on its first insert while the
+    // first, on another connection, finishes.
+    await Promise.all([run(1), run(2), run(3)]);
+    const { rows } = await sql<{
+      n: number;
+    }>`SELECT n FROM log ORDER BY rowid`.execute(repo.kysely);
+    assert.deepEqual(rows.map((r) => r.n).sort(), [1, 1, 2, 2, 3, 3]);
+    await repo.stop();
+  });
+
   test("a stopped Repo runs no queries", async () => {
-    const repo = createRepo({ adapter: sqlite(), database: ":memory:" });
+    const repo = createRepo({
+      adapter: sqlite(),
+      database: ":memory:",
+      poolSize: 1,
+    });
     await repo.stop();
     await assert.rejects(sql`SELECT 1`.execute(repo.kysely));
   });

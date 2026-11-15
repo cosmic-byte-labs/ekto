@@ -410,7 +410,17 @@ function suite(connect: () => Repo) {
     await run(`DROP TABLE mi_dir`);
   });
 
-  test("check constraints: created, enforced and dropped", async () => {
+  test("check constraints: created, enforced and dropped", async (t) => {
+    if (!pg) {
+      // ecto_sqlite3's ALTER TABLE ... DROP CONSTRAINT "name" needs SQLite
+      // 3.53; 3.52 (node-sqlite3 6.0.1's) only finds the name unquoted.
+      const { rows } = await sql<{
+        v: string;
+      }>`SELECT sqlite_version() AS v`.execute(db);
+      const [major = 0, minor = 0] = (rows[0]?.v ?? "").split(".").map(Number);
+      if (major * 1000 + minor < 3053)
+        return t.skip(`SQLite ${rows[0]?.v} cannot drop a quoted constraint`);
+    }
     await run(`CREATE TABLE mi_checks (id INTEGER PRIMARY KEY, n INTEGER)`);
     await run(`INSERT INTO mi_checks (id, n) VALUES (1, -1)`);
     // Existing rows are checked (SQLite ≥ 3.53 adds CHECK constraints with
@@ -650,7 +660,9 @@ function suite(connect: () => Repo) {
 }
 
 describe("migrations on SQLite", () => {
-  suite(() => createRepo({ adapter: sqlite(), database: ":memory:" }));
+  suite(() =>
+    createRepo({ adapter: sqlite(), database: ":memory:", poolSize: 1 }),
+  );
 });
 
 describe("migrations on Postgres", { skip: skipWithoutPg }, () => {

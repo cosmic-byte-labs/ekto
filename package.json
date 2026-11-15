@@ -49,24 +49,23 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.7",
-    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
-    "better-sqlite3": "^13.2.0",
     "kysely": "0.29.9",
     "pg": "^8.23.1",
+    "sqlite3": "^6.0.1",
     "typescript": "^7.0.2"
   },
   "peerDependencies": {
-    "better-sqlite3": ">=12",
     "kysely": "~0.29.9",
-    "pg": "^8"
+    "pg": "^8",
+    "sqlite3": "^6"
   },
   "peerDependenciesMeta": {
-    "better-sqlite3": {
+    "pg": {
       "optional": true
     },
-    "pg": {
+    "sqlite3": {
       "optional": true
     }
   }
