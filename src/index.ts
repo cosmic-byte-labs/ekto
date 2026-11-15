@@ -2,7 +2,9 @@
 
 export type {
   Adapter,
+  AdapterMeta,
   ColumnDescription,
+  ConnectionOptions,
   ConstraintViolation,
   QueryEvent,
   QueryResult,
@@ -36,6 +38,7 @@ export {
 export * from "./changeset.ts";
 export {
   ChangeError,
+  ConnectionError,
   ConstraintError,
   MultiplePrimaryKeyError,
   MultipleResultsError,
@@ -75,6 +78,7 @@ export {
   type QueryRows,
   type Repo,
   type RepoConfig,
+  type ResolvedRepoConfig,
   type RowOf,
   type SchemaQuery,
   type UpdateAll,

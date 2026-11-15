@@ -28,9 +28,9 @@ import {
   StaleEntryError,
 } from "./errors.ts";
 import { Multi } from "./multi.ts";
-import { type KyselyDB, postgres } from "./postgres/index.ts";
+import type { KyselyDB } from "./postgres/index.ts";
 import { connectPg, skipWithoutPg } from "./postgres.test-helper.ts";
-import { createRepo, type Repo } from "./repo.ts";
+import type { Repo } from "./repo.ts";
 import { getMeta, type Infer, type New, schema, t } from "./schema.ts";
 import { sql } from "./sql.ts";
 import { CastError, string } from "./type.ts";
@@ -125,15 +125,10 @@ describe("Repo on Postgres", { skip: skipWithoutPg }, () => {
     >[];
 
   before(async () => {
-    const conn = connectPg<DB>();
-    db = conn.db;
-    close = () => db.destroy();
+    Repo = connectPg<DB>({ onQuery: (event) => queries.push(event) });
+    db = Repo.kysely;
+    close = () => Repo.stop();
     await raw(DDL);
-    Repo = createRepo({
-      db,
-      adapter: postgres(),
-      onQuery: (event) => queries.push(event),
-    });
   });
 
   after(async () => {

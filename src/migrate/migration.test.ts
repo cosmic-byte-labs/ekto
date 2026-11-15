@@ -8,11 +8,10 @@
 
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
-import Database from "better-sqlite3";
-import { type Kysely, Kysely as KyselyClass, SqliteDialect, sql } from "kysely";
-import type { Adapter, ColumnDescription } from "../adapter.ts";
-import { postgres } from "../postgres/index.ts";
+import { sql } from "kysely";
+import type { ColumnDescription } from "../adapter.ts";
 import { connectPg, skipWithoutPg } from "../postgres.test-helper.ts";
+import { createRepo, type Repo } from "../repo.ts";
 import { sqlite } from "../sqlite/index.ts";
 import {
   constraint,
@@ -27,9 +26,6 @@ import {
 } from "./dsl.ts";
 import { createMigrator } from "./runner.ts";
 
-// biome-ignore lint/suspicious/noExplicitAny: any database
-type AnyKysely = Kysely<any>;
-
 // Tables of this file start with mi_, as test files run concurrently on
 // one Postgres database.
 const PREFIX = "mi_";
@@ -37,17 +33,18 @@ const SOURCE = "mi_schema_migrations";
 
 const VIOLATION = /violates|constraint failed/i;
 
-function suite(adapter: Adapter, connect: () => AnyKysely) {
+function suite(connect: () => Repo) {
+  const repo = connect();
+  const { adapter } = repo;
+  const db = repo.kysely;
   const pg = adapter.name === "postgres";
-  let db: AnyKysely;
   let version = 0;
 
   /** A migration with its own version, to run up and roll back. */
   const define = (definition: MigrationDefinition) => {
     version++;
     const migrator = createMigrator({
-      db,
-      adapter,
+      repo,
       migrations: { [`${version}_test_${version}`]: migration(definition) },
       migrationSource: SOURCE,
     });
@@ -82,13 +79,10 @@ function suite(adapter: Adapter, connect: () => AnyKysely) {
         await run(`DROP TABLE IF EXISTS "${t.name}"${pg ? " CASCADE" : ""}`);
   };
 
-  before(async () => {
-    db = connect();
-    await dropAll();
-  });
+  before(dropAll);
   after(async () => {
     await dropAll();
-    await db.destroy();
+    await repo.stop();
   });
 
   test("create and drop table and indexes", async () => {
@@ -656,14 +650,10 @@ function suite(adapter: Adapter, connect: () => AnyKysely) {
 }
 
 describe("migrations on SQLite", () => {
-  suite(sqlite(), () => {
-    const database = new Database(":memory:");
-    database.pragma("foreign_keys = ON");
-    return new KyselyClass({ dialect: new SqliteDialect({ database }) });
-  });
+  suite(() => createRepo({ adapter: sqlite(), database: ":memory:" }));
 });
 
 describe("migrations on Postgres", { skip: skipWithoutPg }, () => {
   if (skipWithoutPg) return;
-  suite(postgres(), () => connectPg().db);
+  suite(() => connectPg());
 });

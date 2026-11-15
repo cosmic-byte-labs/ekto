@@ -3,7 +3,7 @@
  * `Ecto.Repo` (and `Ecto.Repo.Schema` for writes).
  *
  * ```ts
- * const Repo = createRepo({ db, adapter: postgres() });
+ * const Repo = createRepo({ adapter: postgres(), url: process.env.DATABASE_URL });
  * const result = await Repo.insert(changeset);
  * if (result.ok) console.log(result.value.id);
  * else console.log(traverseErrors(result.changeset));
@@ -25,7 +25,8 @@ import {
   type InsertResult,
   isCompilable,
   isCompiledQuery,
-  type Kysely,
+  Kysely,
+  type KyselyPlugin,
   type MergeResult,
   type RawBuilder,
   type UpdateQueryBuilder,
@@ -33,6 +34,7 @@ import {
 } from "kysely";
 import {
   type Adapter,
+  type ConnectionOptions,
   type ConstraintViolation,
   Executor,
   type QueryEvent,
@@ -69,6 +71,7 @@ import {
 } from "./errors.ts";
 import type { DriverTypes, KyselyTable } from "./kysely.ts";
 import { Multi, type MultiResult, type Operation } from "./multi.ts";
+import { ConnectionPool, pooledDialect } from "./pool.ts";
 import {
   assocQuery,
   type PreloadContext,
@@ -291,18 +294,50 @@ export interface ExecResult<R> {
   readonly rows: R[];
 }
 
-export interface RepoConfig<DB> {
-  /** The application's Kysely instance; ekto runs its queries through it. */
-  readonly db: Kysely<DB>;
-  /** The dialect, e.g. `postgres()` from `ekto/postgres`. */
+/**
+ * A Repo's configuration (Ecto's Repo config): the adapter, how it
+ * connects, and its pool.
+ */
+export interface RepoConfig extends ConnectionOptions {
+  /** The database, e.g. `postgres()` from `ekto/postgres`. */
   readonly adapter: Adapter;
+  /**
+   * The number of connections the Repo keeps (Ecto's `:pool_size`), by
+   * default the adapter's: 10 on PostgreSQL, 1 on SQLite.
+   */
+  readonly poolSize?: number;
+  /**
+   * How long a query should wait for a connection at most, in ms (Ecto's
+   * `:queue_target`, 50). When every checkout in a `queueInterval` waits
+   * longer, requests waiting more than twice this long fail with a
+   * `ConnectionError` instead of waiting on.
+   */
+  readonly queueTarget?: number;
+  /** The window `queueTarget` is checked in, in ms (Ecto's `:queue_interval`, 2000). */
+  readonly queueInterval?: number;
+  /** Kysely plugins for `repo.kysely`, e.g. `ParseJSONResultsPlugin`. */
+  readonly plugins?: readonly KyselyPlugin[];
   /** Called after every query ekto runs, e.g. for logging. */
   readonly onQuery?: (event: QueryEvent) => void;
 }
 
+/** A Repo's configuration with its defaults (Ecto's `Repo.config/0`). */
+export type ResolvedRepoConfig = RepoConfig & {
+  readonly poolSize: number;
+  readonly queueTarget: number;
+  readonly queueInterval: number;
+};
+
 // biome-ignore lint/suspicious/noExplicitAny: a Repo over any database type
 export interface Repo<DB = any> {
   readonly adapter: Adapter;
+  /** The configuration it was created with, and its defaults (Ecto's `Repo.config/0`). */
+  readonly config: ResolvedRepoConfig;
+  /**
+   * Closes its connections (Ecto's `Repo.stop/1`). Queries waiting for a
+   * connection fail, and so do later ones.
+   */
+  stop(): Promise<void>;
   /**
    * The Kysely instance this Repo runs on (a transaction's, for a Repo given
    * by `transact` or as `changeset.repo`), for queries ekto does not build.
@@ -596,14 +631,52 @@ type ApplyResult =
   | { readonly ok: false; readonly changeset: AnyChangeset };
 
 /**
- * Creates a Repo running on the given Kysely instance (Ecto's `use Ecto.Repo`).
+ * Creates a Repo with its connection pool (Ecto's `use Ecto.Repo` and
+ * `Repo.start_link/1`):
+ *
+ * ```ts
+ * const repo = createRepo<DB>({
+ *   adapter: postgres(),
+ *   url: process.env.DATABASE_URL,
+ *   poolSize: 10,
+ * });
+ * ```
+ *
+ * Connections open as they are needed; `repo.stop()` closes them.
  *
  * In the test sandbox (`ekto/testing`), this Repo runs on the sandbox's
  * transaction instead, as Ecto's Repo uses the connection the sandbox
  * gave the calling process.
  */
-export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
-  const executor = new Executor(config.db, config.onQuery);
+export function createRepo<DB>(options: RepoConfig): Repo<DB> {
+  const config: ResolvedRepoConfig = Object.freeze({
+    ...options,
+    poolSize: options.poolSize ?? options.adapter.defaultPoolSize,
+    queueTarget: options.queueTarget ?? 50,
+    queueInterval: options.queueInterval ?? 2000,
+  });
+  const pool = new ConnectionPool({
+    size: config.poolSize,
+    queueTarget: config.queueTarget,
+    queueInterval: config.queueInterval,
+  });
+  const db = new Kysely<DB>({
+    dialect: pooledDialect(
+      config.adapter.connect(config, config.poolSize),
+      pool,
+    ),
+    ...(config.plugins && { plugins: [...config.plugins] }),
+  });
+  const executor = new Executor(db, {
+    config,
+    onQuery: config.onQuery,
+    stop: async () => {
+      // Kysely destroys no driver it never connected, so the pool is
+      // stopped here too.
+      pool.stop();
+      await db.destroy();
+    },
+  });
   const root = bind(config.adapter, executor, () => frozen).repo;
   const current = (): Record<string, unknown> =>
     (sandboxes.getStore()?.get(executor) ??
@@ -1911,6 +1984,8 @@ function bind<DB>(
 
   const repo: Repo<DB> = {
     adapter,
+    config: executor.context.config as ResolvedRepoConfig,
+    stop: executor.context.stop,
     get kysely() {
       return executor.db;
     },

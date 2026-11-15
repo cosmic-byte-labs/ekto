@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
 import Database from "better-sqlite3";
-import { Kysely, SqliteDialect } from "kysely";
+import type { Kysely } from "kysely";
 import { hasMany } from "../association.ts";
 import {
   cast,
@@ -175,14 +178,21 @@ describe("Repo on SQLite", () => {
   let db: Kysely<DB>;
   let Repo: Repo<DB>;
 
+  const dir = mkdtempSync(join(tmpdir(), "ekto-sqlite-"));
+
   before(() => {
-    sqliteDb = new Database(":memory:");
+    // The Repo's connection and this one share the file.
+    sqliteDb = new Database(join(dir, "test.db"));
     sqliteDb.exec(DDL);
-    db = new Kysely<DB>({ dialect: new SqliteDialect({ database: sqliteDb }) });
-    Repo = createRepo({ db, adapter });
+    Repo = createRepo<DB>({ adapter, database: join(dir, "test.db") });
+    db = Repo.kysely;
   });
 
-  after(() => db.destroy());
+  after(async () => {
+    await Repo.stop();
+    sqliteDb.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   beforeEach(() => {
     sqliteDb.exec("DELETE FROM posts; DELETE FROM users;");

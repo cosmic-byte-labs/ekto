@@ -177,3 +177,18 @@ function constraintFunction(type: ConstraintType): string {
     exclusion: "exclusionConstraint",
   }[type];
 }
+
+/**
+ * No connection could be checked out of the Repo's pool
+ * (DBConnection.ConnectionError): the request waited too long in the queue
+ * (`reason` "queue_timeout"), or the pool is stopped.
+ */
+export class ConnectionError extends Error {
+  readonly reason: "error" | "queue_timeout";
+
+  constructor(message: string, reason: "error" | "queue_timeout" = "error") {
+    super(message);
+    this.name = "ConnectionError";
+    this.reason = reason;
+  }
+}

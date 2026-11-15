@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
-import Database from "better-sqlite3";
-import { type Kysely, Kysely as KyselyClass, SqliteDialect, sql } from "kysely";
+import { sql } from "kysely";
 import { change } from "../changeset.ts";
-import { postgres } from "../postgres/index.ts";
 import { connectPg, skipWithoutPg } from "../postgres.test-helper.ts";
 import { createRepo, type Repo } from "../repo.ts";
 import { schema, t } from "../schema.ts";
@@ -14,18 +12,10 @@ const User = schema("sandbox_users", { id: t.id(), email: t.string() });
 
 const newUser = (email: string) => change(User.new(), { email });
 
-// biome-ignore lint/suspicious/noExplicitAny: any database
-type AnyKysely = Kysely<any>;
-
-function suite(
-  name: string,
-  connect: () => AnyKysely,
-  Repo: (db: AnyKysely) => Repo,
-  idType: string,
-) {
+function suite(name: string, connect: () => Repo, idType: string) {
   describe(name, () => {
-    const db = connect();
-    const repo = Repo(db);
+    const repo = connect();
+    const db = repo.kysely;
     const box = sandbox(repo);
 
     before(async () => {
@@ -36,7 +26,7 @@ function suite(
     });
     after(async () => {
       await sql.raw("DROP TABLE IF EXISTS sandbox_users").execute(db);
-      await db.destroy();
+      await repo.stop();
     });
 
     test("writes in a test are visible to it", async () => {
@@ -107,33 +97,19 @@ function suite(
 
 suite(
   "sandbox on SQLite",
-  () =>
-    new KyselyClass({
-      dialect: new SqliteDialect({ database: new Database(":memory:") }),
-    }),
-  (db) => createRepo({ db, adapter: sqlite() }),
+  () => createRepo({ adapter: sqlite(), database: ":memory:" }),
   "INTEGER PRIMARY KEY AUTOINCREMENT",
 );
 
 describe("sandbox on Postgres", { skip: skipWithoutPg }, () => {
   if (skipWithoutPg) return;
-  suite(
-    "pool",
-    () => connectPg().db,
-    (db) => createRepo({ db, adapter: postgres() }),
-    "bigserial PRIMARY KEY",
-  );
+  suite("pool", () => connectPg(), "bigserial PRIMARY KEY");
 });
 
-function ownership(
-  name: string,
-  connect: () => AnyKysely,
-  Repo: (db: AnyKysely) => Repo,
-  idType: string,
-) {
+function ownership(name: string, connect: () => Repo, idType: string) {
   describe(name, () => {
-    const db = connect();
-    const repo = Repo(db);
+    const repo = connect();
+    const db = repo.kysely;
 
     before(async () => {
       await sql.raw("DROP TABLE IF EXISTS owned_users").execute(db);
@@ -143,7 +119,7 @@ function ownership(
     });
     after(async () => {
       await sql.raw("DROP TABLE IF EXISTS owned_users").execute(db);
-      await db.destroy();
+      await repo.stop();
     });
 
     const Owned = schema("owned_users", { id: t.id(), email: t.string() });
@@ -191,32 +167,18 @@ function ownership(
 
 ownership(
   "withSandbox on SQLite",
-  () =>
-    new KyselyClass({
-      dialect: new SqliteDialect({ database: new Database(":memory:") }),
-    }),
-  (db) => createRepo({ db, adapter: sqlite() }),
+  () => createRepo({ adapter: sqlite(), database: ":memory:" }),
   "INTEGER PRIMARY KEY AUTOINCREMENT",
 );
 
 describe("withSandbox on Postgres", { skip: skipWithoutPg }, () => {
   if (skipWithoutPg) return;
-  ownership(
-    "pool",
-    () => connectPg().db,
-    (db) => createRepo({ db, adapter: postgres() }),
-    "bigserial PRIMARY KEY",
-  );
+  ownership("pool", () => connectPg(), "bigserial PRIMARY KEY");
 });
 
 describe("sandbox outside tests", () => {
   test("the Repo is only available in a test", () => {
-    const repo = createRepo({
-      db: new KyselyClass({
-        dialect: new SqliteDialect({ database: new Database(":memory:") }),
-      }),
-      adapter: sqlite(),
-    });
+    const repo = createRepo({ adapter: sqlite(), database: ":memory:" });
     const box = sandbox(repo, { beforeEach: () => {}, afterEach: () => {} });
     assert.throws(() => box.repo, /only available inside a test/);
   });

@@ -56,17 +56,12 @@ describe("ekto migrate, rollback and status", () => {
   before(async () => {
     dir = await mkdtemp(join(tmpdir(), "ekto-cli-"));
     const database = join(dir, "test.db");
-    const kysely = JSON.stringify(import.meta.resolve("kysely"));
-    const betterSqlite = JSON.stringify(import.meta.resolve("better-sqlite3"));
     await writeFile(
       join(dir, "ekto.config.ts"),
-      `import Database from ${betterSqlite};
-import { Kysely, SqliteDialect } from ${kysely};
-import { sqlite } from ${url("../sqlite/index.ts")};
+      `import { sqlite } from ${url("../sqlite/index.ts")};
 
 export default () => ({
-  db: new Kysely({ dialect: new SqliteDialect({ database: new Database(${JSON.stringify(database)}) }) }),
-  adapter: sqlite(),
+  repo: { adapter: sqlite(), database: ${JSON.stringify(database)} },
   migrationsFolder: ${JSON.stringify(join(dir, "migrations"))},
 });
 `,

@@ -106,20 +106,20 @@ describe("utcTimestamps", () => {
     assert.equal(types.getTypeParser(1184), pg.types.getTypeParser(1184));
   });
 
-  test("reads timestamps from the database as UTC", {
+  test("the Repo's pool reads timestamps from the database as UTC", {
     skip: skipWithoutPg,
   }, async () => {
-    const { db, pool } = connectPg();
+    const repo = connectPg();
     try {
       const { rows } = await sql<{ at: Date; ats: Date[] }>`
         SELECT '2026-01-02 10:30:00'::timestamp AS at,
-          ARRAY['2026-01-02 10:30:00'::timestamp] AS ats`.execute(db);
+          ARRAY['2026-01-02 10:30:00'::timestamp] AS ats`.execute(repo.kysely);
       assert.deepEqual(rows[0], {
         at: new Date("2026-01-02T10:30:00Z"),
         ats: [new Date("2026-01-02T10:30:00Z")],
       });
     } finally {
-      await pool.end();
+      await repo.stop();
     }
   });
 });

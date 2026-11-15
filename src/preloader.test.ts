@@ -3,7 +3,7 @@ import { after, before, beforeEach, describe, test } from "node:test";
 import {
   CompiledQuery,
   DummyDriver,
-  Kysely,
+  type Kysely,
   PostgresAdapter,
   PostgresIntrospector,
   PostgresQueryCompiler,
@@ -69,15 +69,17 @@ const sleepy = <Q extends { where(expression: any): Q }>(query: Q): Q =>
 
 /** A Repo whose queries compile but never run, to check their SQL. */
 function dummyRepo(): Repo<DB> {
-  const db = new Kysely<DB>({
-    dialect: {
-      createAdapter: () => new PostgresAdapter(),
-      createDriver: () => new DummyDriver(),
-      createIntrospector: (k) => new PostgresIntrospector(k),
-      createQueryCompiler: () => new PostgresQueryCompiler(),
+  return createRepo<DB>({
+    adapter: {
+      ...postgres(),
+      connect: () => ({
+        createAdapter: () => new PostgresAdapter(),
+        createDriver: () => new DummyDriver(),
+        createIntrospector: (k) => new PostgresIntrospector(k),
+        createQueryCompiler: () => new PostgresQueryCompiler(),
+      }),
     },
   });
-  return createRepo({ db, adapter: postgres() });
 }
 
 describe("Repo.assoc queries", () => {
@@ -214,20 +216,16 @@ describe("Repo.preload on Postgres", { skip: skipWithoutPg }, () => {
   const raw = (text: string) => db.executeQuery(CompiledQuery.raw(text));
 
   before(async () => {
-    db = connectPg<DB>().db;
+    Repo = connectPg<DB>({ onQuery: (event) => queries.push(event) });
+    db = Repo.kysely;
     await raw(DDL);
-    Repo = createRepo({
-      db,
-      adapter: postgres(),
-      onQuery: (event) => queries.push(event),
-    });
   });
 
   after(async () => {
     await raw(
       "DROP TABLE IF EXISTS pl_posts_tags, pl_tags, pl_comments, pl_profiles, pl_posts, pl_users",
     );
-    await db.destroy();
+    await Repo.stop();
   });
 
   beforeEach(async () => {

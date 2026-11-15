@@ -2,8 +2,15 @@
  * SQLite support (`ekto/sqlite`), following ecto_sqlite3.
  */
 
-import type { Adapter, ConstraintViolation } from "../adapter.ts";
+import Database from "better-sqlite3";
+import { type Dialect, SqliteDialect, SqliteDriver } from "kysely";
+import type {
+  Adapter,
+  ConnectionOptions,
+  ConstraintViolation,
+} from "../adapter.ts";
 import type { DriverValue, KyselyTables } from "../kysely.ts";
+import { connectionsDriver } from "../pool.ts";
 import type { AnySchema } from "../schema.ts";
 import { quoteIdentifierAnsi, type SqlSyntax } from "../sql.ts";
 import type { PrimitiveType } from "../type.ts";
@@ -196,20 +203,71 @@ function toConstraints(error: unknown): readonly ConstraintViolation[] {
 }
 
 /**
- * The SQLite adapter, for Kysely's `SqliteDialect` with better-sqlite3.
+ * Connections to the `database` file with better-sqlite3, set up as
+ * ecto_sqlite3 and Exqlite set them up: `journal_mode` WAL, a
+ * `busy_timeout` of 2000 ms, and foreign keys on.
+ */
+function connect(options: ConnectionOptions, poolSize: number): Dialect {
+  const {
+    database,
+    journalMode = "wal",
+    busyTimeout = 2000,
+    foreignKeys = true,
+  } = options;
+  if (database === undefined)
+    throw new TypeError(
+      'No SQLite database path specified. Give the Repo a database: createRepo({ adapter: sqlite(), database: "path/to/database.db" })',
+    );
+  if (database === ":memory:" && poolSize !== 1)
+    throw new TypeError("In memory databases must have a poolSize of 1");
+  const open = async () => {
+    const db = new Database(database);
+    db.pragma(`journal_mode = ${journalMode}`);
+    db.pragma(`busy_timeout = ${busyTimeout}`);
+    db.pragma(`foreign_keys = ${foreignKeys ? "ON" : "OFF"}`);
+    return db;
+  };
+  const dialect = new SqliteDialect({ database: open });
+  return {
+    // Kysely's SqliteDriver shares one connection between all callers;
+    // the pool gives each caller its own.
+    createDriver: () =>
+      connectionsDriver(() => new SqliteDriver({ database: open })),
+    createQueryCompiler: () => dialect.createQueryCompiler(),
+    createAdapter: () => dialect.createAdapter(),
+    createIntrospector: (db) => dialect.createIntrospector(db),
+  };
+}
+
+/**
+ * The SQLite adapter, connecting with better-sqlite3 (which the application
+ * installs) to the `database` file:
+ *
+ * ```ts
+ * const repo = createRepo<DB>({ adapter: sqlite(), database: "app.db" });
+ * ```
+ *
+ * The pool has one connection unless `poolSize` says otherwise, where
+ * ecto_sqlite3 has 5: better-sqlite3 runs queries on the event loop's
+ * thread, so a connection waiting for another's write lock blocks the
+ * thread for up to `busyTimeout`, and the other cannot finish its
+ * transaction meanwhile. One connection queues transactions instead.
+ * `":memory:"` databases must have a pool of one, as each connection would
+ * open its own.
  *
  * Values are stored as ecto_sqlite3 stores them: booleans as 0 and 1,
  * maps and arrays as JSON text, date-times as ISO 8601 text in UTC.
  *
  * Unique violations are matched by the index name Ecto's conventions give
  * the reported columns (`users_email_index`); foreign key violations carry
- * no name and are always thrown. Turn foreign keys on with
- * `PRAGMA foreign_keys = ON` for them to be checked at all.
+ * no name and are always thrown.
  */
 export function sqlite(): Adapter {
   return Object.freeze({
     name: "sqlite",
     syntax: sqliteSyntax,
+    defaultPoolSize: 1,
+    connect,
     load: loadValue,
     dump: dumpValue,
     toConstraints,

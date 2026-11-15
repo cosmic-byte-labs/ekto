@@ -58,6 +58,16 @@
     "typescript": "^7.0.2"
   },
   "peerDependencies": {
-    "kysely": "~0.29.9"
+    "better-sqlite3": ">=12",
+    "kysely": "~0.29.9",
+    "pg": "^8"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    }
   }
 }

@@ -13,8 +13,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import type { Kysely } from "kysely";
-import type { Adapter } from "../adapter.ts";
+import { createRepo, type RepoConfig } from "../repo.ts";
 import {
   generate,
   generateSchema,
@@ -27,9 +26,11 @@ import { createMigrator, fileMigrations } from "./runner.ts";
 export { generate };
 
 export interface EktoConfig {
-  // biome-ignore lint/suspicious/noExplicitAny: any database
-  readonly db: Kysely<any>;
-  readonly adapter: Adapter;
+  /**
+   * The Repo's configuration, e.g. `{ adapter: postgres(), url }`; the
+   * commands start the Repo themselves, as Ecto's mix tasks do.
+   */
+  readonly repo: RepoConfig;
   /** `migrations` by default, relative to the working directory. */
   readonly migrationsFolder?: string;
   /** The table of executed versions, `schema_migrations` by default. */
@@ -67,6 +68,7 @@ options:
   --to VERSION          run up to (or roll back down to) VERSION, inclusive
   --to-exclusive VERSION  as --to, without VERSION itself
   --no-lock             do not lock the migrations table
+  --pool-size N         migrate, rollback and status: the Repo's pool size (default 2)
   --config FILE         configuration file (default: ekto.config.ts or .js)
   --migrations DIR      migrations folder (overrides the configuration)
   --schemas DIR         schemas folder, for gen.schema (overrides the configuration)
@@ -96,9 +98,9 @@ async function loadConfig(path: string | undefined): Promise<EktoConfig> {
   const config = module.default;
   const resolved: EktoConfig =
     typeof config === "function" ? await config() : config;
-  if (!resolved?.db || !resolved.adapter)
+  if (!resolved?.repo?.adapter)
     throw new Error(
-      `${file} must default-export { db, adapter } or a function returning it`,
+      `${file} must default-export { repo: { adapter, ... } } or a function returning it`,
     );
   return resolved;
 }
@@ -121,6 +123,7 @@ export async function main(
       "to-exclusive": { type: "string" },
       all: { type: "boolean" },
       "no-lock": { type: "boolean" },
+      "pool-size": { type: "string" },
       schemas: { type: "string" },
       migration: { type: "string" },
       "no-migration": { type: "boolean" },
@@ -157,49 +160,46 @@ export async function main(
     } catch (error) {
       if (values.config !== undefined) throw error;
     }
-    try {
-      const migrationsFolder =
-        values.migrations ?? config?.migrationsFolder ?? "migrations";
-      let files: string[];
-      if (command === "gen.migration") {
-        if (rest.length !== 1)
-          throw new Error("usage: ekto gen.migration <name>");
-        files = [await generate(migrationsFolder, rest[0] as string)];
-      } else {
-        const [name, table, ...attrs] = rest;
-        if (name === undefined || table === undefined)
-          throw new Error(
-            "usage: ekto gen.schema <Name> <table> [field:type[:unique]...]",
-          );
-        const binaryId = values["binary-id"]
-          ? true
-          : values["no-binary-id"]
-            ? false
-            : (config?.binaryId ?? false);
-        files = await generateSchema(
-          { name, table, attrs: parseAttrs(attrs, { binaryId }), binaryId },
-          {
-            schemasFolder:
-              values.schemas ?? config?.schemasFolder ?? "src/schemas",
-            migrationsFolder,
-            migration: values["no-migration"]
-              ? "none"
-              : ((values.migration as MigrationFormat | undefined) ??
-                config?.migrationFormat ??
-                "ekto"),
-            ...(config && { adapter: config.adapter }),
-          },
+    const migrationsFolder =
+      values.migrations ?? config?.migrationsFolder ?? "migrations";
+    let files: string[];
+    if (command === "gen.migration") {
+      if (rest.length !== 1)
+        throw new Error("usage: ekto gen.migration <name>");
+      files = [await generate(migrationsFolder, rest[0] as string)];
+    } else {
+      const [name, table, ...attrs] = rest;
+      if (name === undefined || table === undefined)
+        throw new Error(
+          "usage: ekto gen.schema <Name> <table> [field:type[:unique]...]",
         );
-      }
-      for (const file of files) out(`* creating ${file}`);
-      return 0;
-    } finally {
-      await config?.db.destroy();
+      const binaryId = values["binary-id"]
+        ? true
+        : values["no-binary-id"]
+          ? false
+          : (config?.binaryId ?? false);
+      files = await generateSchema(
+        { name, table, attrs: parseAttrs(attrs, { binaryId }), binaryId },
+        {
+          schemasFolder:
+            values.schemas ?? config?.schemasFolder ?? "src/schemas",
+          migrationsFolder,
+          migration: values["no-migration"]
+            ? "none"
+            : ((values.migration as MigrationFormat | undefined) ??
+              config?.migrationFormat ??
+              "ekto"),
+          ...(config && { adapter: config.repo.adapter }),
+        },
+      );
     }
+    for (const file of files) out(`* creating ${file}`);
+    return 0;
   }
 
   if (command === "gen.schemas") {
     const config = await loadConfig(values.config);
+    const repo = createRepo(config.repo);
     try {
       const tables =
         rest.length === 0
@@ -211,8 +211,8 @@ export async function main(
               }),
             );
       const { written, skipped } = await generateSchemas(
-        config.db,
-        config.adapter,
+        repo.kysely,
+        repo.adapter,
         {
           schemasFolder:
             values.schemas ?? config.schemasFolder ?? "src/schemas",
@@ -228,7 +228,7 @@ export async function main(
       for (const file of skipped) out(`* skipping ${file} (it exists)`);
       return 0;
     } finally {
-      await config.db.destroy();
+      await repo.stop();
     }
   }
 
@@ -237,10 +237,15 @@ export async function main(
     throw new Error(`unknown command ${command}`);
   }
   const config = await loadConfig(values.config);
+  // Started for the command with a pool of two, as `mix ecto.migrate`
+  // starts the Repo: one connection for the lock, one for the migrations.
+  const repo = createRepo({
+    ...config.repo,
+    poolSize: number("pool-size", values["pool-size"]) ?? 2,
+  });
   try {
     const migrator = createMigrator({
-      db: config.db,
-      adapter: config.adapter,
+      repo,
       migrations: fileMigrations(
         values.migrations ?? config.migrationsFolder ?? "migrations",
       ),
@@ -271,6 +276,6 @@ export async function main(
       );
     return 0;
   } finally {
-    await config.db.destroy();
+    await repo.stop();
   }
 }

@@ -9,6 +9,7 @@ import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { type Kysely, sql } from "kysely";
 import type { Adapter } from "../adapter.ts";
+import type { Repo } from "../repo.ts";
 import {
   type Command,
   type Executable,
@@ -26,10 +27,8 @@ import {
 export type Migrations = Readonly<Record<string, Migration>>;
 
 export interface MigratorOptions {
-  // biome-ignore lint/suspicious/noExplicitAny: any database
-  readonly db: Kysely<any>;
-  /** Turns commands into SQL; must implement `ddl`. */
-  readonly adapter: Adapter;
+  /** The Repo to migrate; its adapter must implement `ddl`. */
+  readonly repo: Repo;
   /** The migrations, or a function loading them (e.g. `fileMigrations`). */
   readonly migrations: Migrations | (() => Promise<Migrations>);
   /** The table of executed versions, `schema_migrations` by default (Ecto's `:migration_source`). */
@@ -37,8 +36,8 @@ export interface MigratorOptions {
   /**
    * Whether to lock while migrating so that two migrators never run the
    * same migration, `true` by default (Ecto's `:migration_lock`). On
-   * PostgreSQL, the lock holds a connection, so the pool needs at least two;
-   * migrations fail when no second connection comes within 2 seconds.
+   * PostgreSQL, the lock holds a connection, so the Repo's pool needs at
+   * least two, and migrations fail on a pool of one.
    */
   readonly migrationLock?: boolean;
 }
@@ -154,22 +153,22 @@ function positive(name: string, value: number | undefined) {
 }
 
 /**
- * Runs `migrations` on `db`, following Ecto.Migrator. Each migration runs
+ * Runs `migrations` on the Repo's database, following Ecto.Migrator. Each migration runs
  * in its own transaction (unless it sets `disableDdlTransaction`) together
  * with recording its version, so a failed migration leaves nothing behind.
  * Pending migrations run whatever their order relative to the executed ones.
  *
  * ```ts
  * const migrator = createMigrator({
- *   db,
- *   adapter: postgres(),
+ *   repo,
  *   migrations: fileMigrations("migrations"),
  * });
  * await migrator.migrate();
  * ```
  */
 export function createMigrator(options: MigratorOptions): EktoMigrator {
-  const { db, adapter } = options;
+  const { repo } = options;
+  const { adapter } = repo;
   const source = options.migrationSource ?? "schema_migrations";
   const lock = options.migrationLock ?? true;
   const load = async (): Promise<Entry[]> =>
@@ -182,7 +181,7 @@ export function createMigrator(options: MigratorOptions): EktoMigrator {
   // Ecto.Migration.SchemaMigration.ensure_schema_migrations_table!/3.
   const ensureTable = () =>
     runCommands(
-      db,
+      repo.kysely,
       adapter,
       record("up", (m) =>
         m.createIfNotExists(table(source), (t) => {
@@ -195,7 +194,7 @@ export function createMigrator(options: MigratorOptions): EktoMigrator {
   const versions = async (): Promise<Set<number>> => {
     const { rows } = await sql<{
       version: unknown;
-    }>`SELECT version FROM ${sql.table(source)}`.execute(db);
+    }>`SELECT version FROM ${sql.table(source)}`.execute(repo.kysely);
     return new Set(rows.map((row) => Number(row.version)));
   };
 
@@ -207,7 +206,11 @@ export function createMigrator(options: MigratorOptions): EktoMigrator {
     lock &&
     !entry.migration.disableMigrationLock &&
     adapter.lockForMigrations !== undefined
-      ? adapter.lockForMigrations(db, source, async () => fn(await versions()))
+      ? adapter.lockForMigrations(
+          { kysely: repo.kysely, poolSize: repo.config.poolSize },
+          source,
+          async () => fn(await versions()),
+        )
       : fn(await versions());
 
   const execute = async (entry: Entry, direction: "up" | "down") => {
@@ -231,8 +234,8 @@ export function createMigrator(options: MigratorOptions): EktoMigrator {
             q,
           );
       };
-      if (entry.migration.disableDdlTransaction) await body(db);
-      else await db.transaction().execute(body);
+      if (entry.migration.disableDdlTransaction) await body(repo.kysely);
+      else await repo.kysely.transaction().execute(body);
     } catch (error) {
       if (error instanceof Error)
         error.message = `migration ${entry.key} failed: ${error.message}`;

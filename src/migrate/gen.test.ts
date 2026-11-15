@@ -4,12 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { pathToFileURL } from "node:url";
-import Database from "better-sqlite3";
-import { type Kysely, Kysely as KyselyClass, SqliteDialect, sql } from "kysely";
+import { sql } from "kysely";
 import type { Adapter } from "../adapter.ts";
 import { postgres } from "../postgres/index.ts";
 import { connectPg, skipWithoutPg } from "../postgres.test-helper.ts";
-import { createRepo } from "../repo.ts";
+import { createRepo, type Repo } from "../repo.ts";
 import { sqlite } from "../sqlite/index.ts";
 import { main } from "./cli.ts";
 import {
@@ -24,9 +23,6 @@ import {
   schemaSource,
 } from "./gen.ts";
 import { createMigrator } from "./runner.ts";
-
-// biome-ignore lint/suspicious/noExplicitAny: any database
-type AnyKysely = Kysely<any>;
 
 describe("parseAttrs (mix phx.gen.schema attributes)", () => {
   test("types, unique, references, arrays and enums", () => {
@@ -131,10 +127,12 @@ async function link(file: string) {
   return import(pathToFileURL(file).href);
 }
 
-function roundTrip(name: string, connect: () => AnyKysely, adapter: Adapter) {
+function roundTrip(name: string, connect: () => Repo) {
   describe(name, () => {
     let dir: string;
-    const db = connect();
+    const repo = connect();
+    const { adapter } = repo;
+    const db = repo.kysely;
     const tables = [
       `gen_comments_${adapter.name}`,
       `gen_kposts_${adapter.name}`,
@@ -152,7 +150,7 @@ function roundTrip(name: string, connect: () => AnyKysely, adapter: Adapter) {
     });
     after(async () => {
       await drop();
-      await db.destroy();
+      await repo.stop();
       await rm(dir, { recursive: true, force: true });
     });
 
@@ -189,8 +187,7 @@ function roundTrip(name: string, connect: () => AnyKysely, adapter: Adapter) {
       assert.equal(commentFile, join(folders.schemasFolder, "blog/comment.ts"));
 
       const migrator = createMigrator({
-        db,
-        adapter,
+        repo,
         migrationSource: `gen_schema_migrations_${adapter.name}`,
         migrations: {
           [`20260101000000_create_${authors}`]: (await link(authorMigration))
@@ -202,7 +199,6 @@ function roundTrip(name: string, connect: () => AnyKysely, adapter: Adapter) {
       assert.equal((await migrator.migrate()).length, 2);
 
       const { Author, changeset } = await link(authorFile);
-      const repo = createRepo({ db, adapter });
       const ann = await repo.insertOrThrow(
         changeset(Author.new(), { email: "ann@x", age: "41" }),
       );
@@ -250,7 +246,6 @@ function roundTrip(name: string, connect: () => AnyKysely, adapter: Adapter) {
       const migration = await link(migrationPath);
       await migration.up(db);
       const { KPost, changeset } = await link(schemaPath);
-      const repo = createRepo({ db, adapter });
       const post = await repo.insertOrThrow(
         changeset(KPost.new(), { title: "a", score: 1.5, meta: { a: 1 } }),
       );
@@ -271,18 +266,13 @@ function roundTrip(name: string, connect: () => AnyKysely, adapter: Adapter) {
   });
 }
 
-roundTrip(
-  "gen.schema on SQLite",
-  () =>
-    new KyselyClass({
-      dialect: new SqliteDialect({ database: new Database(":memory:") }),
-    }),
-  sqlite(),
+roundTrip("gen.schema on SQLite", () =>
+  createRepo({ adapter: sqlite(), database: ":memory:" }),
 );
 
 describe("gen.schema on Postgres", { skip: skipWithoutPg }, () => {
   if (skipWithoutPg) return;
-  roundTrip("pool", () => connectPg().db, postgres());
+  roundTrip("pool", () => connectPg());
 });
 
 describe("ekto gen.schema", () => {
@@ -341,19 +331,14 @@ describe("ekto gen.schema", () => {
     const folder = join(dir, "binary");
     const config = join(folder, "ekto.config.ts");
     await mkdir(folder);
-    const kysely = JSON.stringify(import.meta.resolve("kysely"));
-    const betterSqlite = JSON.stringify(import.meta.resolve("better-sqlite3"));
     const sqliteUrl = JSON.stringify(
       pathToFileURL(join(import.meta.dirname, "../sqlite/index.ts")).href,
     );
     await writeFile(
       config,
-      `import Database from ${betterSqlite};
-import { Kysely, SqliteDialect } from ${kysely};
-import { sqlite } from ${sqliteUrl};
+      `import { sqlite } from ${sqliteUrl};
 export default {
-  db: new Kysely({ dialect: new SqliteDialect({ database: new Database(":memory:") }) }),
-  adapter: sqlite(),
+  repo: { adapter: sqlite(), database: ":memory:" },
   schemasFolder: ${JSON.stringify(join(folder, "schemas"))},
   migrationsFolder: ${JSON.stringify(join(folder, "migrations"))},
   binaryId: true,
@@ -383,13 +368,14 @@ export default {
 
 function fromDatabase(
   name: string,
-  connect: () => AnyKysely,
-  adapter: Adapter,
+  connect: () => Repo,
   ddl: (orgs: string, members: string) => string[],
 ) {
   describe(name, () => {
     let dir: string;
-    const db = connect();
+    const repo = connect();
+    const { adapter } = repo;
+    const db = repo.kysely;
     const orgs = `gen_db_orgs_${adapter.name}`;
     const members = `gen_db_members_${adapter.name}`;
     const drop = async () => {
@@ -404,7 +390,7 @@ function fromDatabase(
     });
     after(async () => {
       await drop();
-      await db.destroy();
+      await repo.stop();
       await rm(dir, { recursive: true, force: true });
     });
 
@@ -464,7 +450,6 @@ function fromDatabase(
 
       const Org = (await link(join(folder, "org.ts"))).Org;
       const Member = await link(join(folder, schemaFile(memberName)));
-      const repo = createRepo({ db, adapter });
       const org = await repo.insertOrThrow(Org.new({ name: "acme" }));
       const member = await repo.insertOrThrow(
         Member.changeset(Member[memberName].new({ org_id: org.id }), {
@@ -499,11 +484,7 @@ function fromDatabase(
 
 fromDatabase(
   "gen.schemas on SQLite",
-  () =>
-    new KyselyClass({
-      dialect: new SqliteDialect({ database: new Database(":memory:") }),
-    }),
-  sqlite(),
+  () => createRepo({ adapter: sqlite(), database: ":memory:" }),
   (orgs, members) => [
     `CREATE TABLE ${orgs} (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)`,
     `CREATE TABLE ${members} (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, nickname TEXT, role TEXT NOT NULL DEFAULT 'member', org_id INTEGER REFERENCES ${orgs}(id), inserted_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
@@ -515,8 +496,7 @@ describe("gen.schemas on Postgres", { skip: skipWithoutPg }, () => {
   if (skipWithoutPg) return;
   fromDatabase(
     "pool",
-    () => connectPg().db,
-    postgres(),
+    () => connectPg(),
     (orgs, members) => [
       `CREATE TABLE ${orgs} (id bigserial PRIMARY KEY, name varchar(255) NOT NULL)`,
       `CREATE TABLE ${members} (id bigserial PRIMARY KEY, email varchar(255) NOT NULL, nickname text, role text NOT NULL DEFAULT 'member', org_id bigint REFERENCES ${orgs}(id), inserted_at timestamp(0) NOT NULL, updated_at timestamp(0) NOT NULL)`,

@@ -2,8 +2,14 @@
  * PostgreSQL support (`ekto/postgres`).
  */
 
-import { type Kysely, sql } from "kysely";
-import type { Adapter, ConstraintViolation } from "../adapter.ts";
+import { PostgresDialect, sql } from "kysely";
+import pg from "pg";
+import type {
+  Adapter,
+  AdapterMeta,
+  ConnectionOptions,
+  ConstraintViolation,
+} from "../adapter.ts";
 import type { ConstraintType } from "../changeset.ts";
 import type { DriverValue, KyselyTables } from "../kysely.ts";
 import { MigrationError } from "../migrate/dsl.ts";
@@ -49,7 +55,7 @@ export type PostgresTypes = {
  *
  * ```ts
  * type DB = KyselyDB<[typeof User, typeof Post]>;
- * const db = new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
+ * const repo = createRepo<DB>({ adapter: postgres(), url });
  * ```
  */
 export type KyselyDB<Schemas extends readonly AnySchema[]> = KyselyTables<
@@ -191,12 +197,8 @@ const parseUtc = (value: string | null): unknown =>
 /**
  * node-postgres type parsers that read `timestamp` (without time zone) and
  * `timestamp[]` columns as UTC, as Ecto writes them, instead of in the
- * client's local time zone. The other types keep the given parsers:
- *
- * ```ts
- * import pg from "pg";
- * const pool = new pg.Pool({ connectionString, types: utcTimestamps(pg.types) });
- * ```
+ * client's local time zone. The other types keep the given parsers. The
+ * Repo's pool uses them.
  */
 export function utcTimestamps(types: TypeParsers): TypeParsers {
   const getTypeParser = (oid: number, format?: "text" | "binary") => {
@@ -214,23 +216,48 @@ export function utcTimestamps(types: TypeParsers): TypeParsers {
 }
 
 /**
- * The PostgreSQL adapter, for Kysely's `PostgresDialect` with node-postgres.
- *
- * Columns created as Ecto creates them (`timestamp` without time zone,
- * holding UTC) must be read as UTC, or node-postgres reads them in the
- * client's local time zone. Configure the pool with {@link utcTimestamps}:
+ * The node-postgres pool of a Repo (Postgrex's connection options):
+ * `url`, or `hostname` (or `socketDir`), `port`, `database`, `username`
+ * and `password`, and `ssl`. `timestamp` columns read as UTC
+ * ({@link utcTimestamps}).
+ */
+function connect(
+  options: ConnectionOptions,
+  poolSize: number,
+): PostgresDialect {
+  const config: pg.PoolConfig = {
+    max: poolSize,
+    types: utcTimestamps(pg.types),
+  };
+  if (options.url !== undefined) config.connectionString = options.url;
+  const host = options.hostname ?? options.socketDir;
+  if (host !== undefined) config.host = host;
+  if (options.port !== undefined) config.port = options.port;
+  if (options.database !== undefined) config.database = options.database;
+  if (options.username !== undefined) config.user = options.username;
+  if (options.password !== undefined) config.password = options.password;
+  if (options.ssl !== undefined) config.ssl = options.ssl;
+  return new PostgresDialect({ pool: new pg.Pool(config) });
+}
+
+/**
+ * The PostgreSQL adapter, connecting with node-postgres (`pg`, which the
+ * application installs):
  *
  * ```ts
- * import pg from "pg";
- * new pg.Pool({ connectionString, types: utcTimestamps(pg.types) });
+ * const repo = createRepo<DB>({ adapter: postgres(), url, poolSize: 10 });
  * ```
  *
- * `timestamptz` columns work either way.
+ * Columns created as Ecto creates them (`timestamp` without time zone,
+ * holding UTC) are read as UTC; `timestamptz` columns work either way.
  */
 export function postgres(): Adapter {
   return Object.freeze({
     name: "postgres",
     syntax: postgresSyntax,
+    // The pool size of the Repo configuration Phoenix generates.
+    defaultPoolSize: 10,
+    connect,
     load: loadValue,
     dump: dumpValue,
     toConstraints,
@@ -241,39 +268,41 @@ export function postgres(): Adapter {
   });
 }
 
-/** How long the migrations wait for a second connection while the lock holds one. */
-const MIGRATION_CONNECTION_WAIT = 2000;
-
 /**
  * Ecto's `:table_lock` strategy: a transaction on its own connection locks
  * the migrations table in SHARE UPDATE EXCLUSIVE mode, which conflicts with
  * itself but not with the inserts and deletes of the migration running on
- * another connection. So the pool needs two connections: where Ecto raises
- * for a `pool_size` of 1, this raises when no second connection comes.
+ * another connection. So the pool needs two connections, and a pool of one
+ * raises, as Ecto's does.
  */
 async function lockForMigrations<T>(
-  // biome-ignore lint/suspicious/noExplicitAny: any database
-  db: Kysely<any>,
+  { kysely, poolSize }: AdapterMeta,
   table: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const trx = await db.startTransaction().execute();
+  if (poolSize === 1)
+    throw new MigrationError(
+      `Migrations failed to run because the connection pool size is less than 2.
+
+ekto requires a pool size of at least 2 to support concurrent migrators.
+When migrations run, ekto uses one connection to maintain a lock and
+another to run migrations.
+
+If you are running migrations with the ekto command, you can increase the
+number of connections via the pool size option:
+
+    ekto migrate --pool-size 2
+
+If you are running the migrator programmatically, you can configure the
+pool size via the Repo's configuration:
+
+    createRepo({ ..., poolSize: 2 }) // at least`,
+    );
+  const trx = await kysely.startTransaction().execute();
   try {
     await sql`LOCK TABLE ${sql.table(table)} IN SHARE UPDATE EXCLUSIVE MODE`.execute(
       trx,
     );
-    try {
-      await db.connection().execute(async () => {}, {
-        signal: AbortSignal.timeout(MIGRATION_CONNECTION_WAIT),
-      });
-    } catch (error) {
-      if ((error as Error).name !== "TimeoutError") throw error;
-      throw new MigrationError(
-        `Migrations failed to run because no second connection was available within ${MIGRATION_CONNECTION_WAIT / 1000}s: the connection pool size is probably less than 2.
-
-ekto requires a pool size of at least 2 to support concurrent migrators. When migrations run, ekto uses one connection to maintain a lock and another to run migrations. Increase the pool's max (e.g. new pg.Pool({ max: 2 })), or run without the lock (migrationLock: false, or --no-lock).`,
-      );
-    }
     const result = await fn();
     await trx.commit().execute();
     return result;

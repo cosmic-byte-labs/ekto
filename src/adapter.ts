@@ -1,16 +1,19 @@
 /**
  * Adapters and the executor: how ekto talks to a database.
  *
- * ekto does not open connections. It runs its SQL through the Kysely
- * instance the application already has (`db.executeQuery`), so pools,
- * dialects, plugins and logging stay the application's. The adapter only
- * knows the dialect: how to write SQL and how the driver represents values
- * (Ecto's adapter `loaders/2` and `dumpers/2`).
+ * As Ecto's Repo, a Repo owns its connections: the adapter opens them with
+ * the Repo's connection options (Ecto's `Ecto.Adapter.init/1`), in a pool
+ * of `poolSize` that ekto keeps, and ekto runs its SQL through a Kysely
+ * instance on that pool (`repo.kysely`), so Kysely plugins still apply.
+ * The adapter also knows the dialect: how to write SQL and how the driver
+ * represents values (Ecto's adapter `loaders/2` and `dumpers/2`).
  */
 
+import type { ConnectionOptions as TlsOptions } from "node:tls";
 import {
   CompiledQuery,
   type ControlledTransaction,
+  type Dialect,
   isCompiledQuery,
   type Kysely,
 } from "kysely";
@@ -24,10 +27,59 @@ import type {
 import type { Queryable, SqlSyntax } from "./sql.ts";
 import type { PrimitiveType } from "./type.ts";
 
-/** A dialect: SQL syntax and the driver's value representation. */
+/**
+ * How a Repo connects (Ecto's Repo configuration). Each adapter reads the
+ * options it knows: PostgreSQL `url` or `hostname`, `port`, `database`,
+ * `username`, `password`, `socketDir` and `ssl`; SQLite `database`,
+ * `journalMode`, `busyTimeout` and `foreignKeys`.
+ */
+export interface ConnectionOptions {
+  /** A connection URL, e.g. `postgres://user:pass@localhost/app_dev`. */
+  readonly url?: string;
+  readonly hostname?: string;
+  readonly port?: number;
+  /** The database name, or for SQLite the file path (or `":memory:"`). */
+  readonly database?: string;
+  readonly username?: string;
+  readonly password?: string;
+  /** The directory of the server's Unix socket, instead of a hostname. */
+  readonly socketDir?: string;
+  readonly ssl?: boolean | TlsOptions;
+  /** SQLite's `journal_mode` (ecto_sqlite3's default: `wal`). */
+  readonly journalMode?:
+    | "delete"
+    | "truncate"
+    | "persist"
+    | "memory"
+    | "wal"
+    | "off";
+  /** SQLite's `busy_timeout` in ms (default 2000). */
+  readonly busyTimeout?: number;
+  /** SQLite's `foreign_keys` (default on). */
+  readonly foreignKeys?: boolean;
+}
+
+/** What an adapter knows of the Repo it runs a migration lock for (Ecto's adapter meta). */
+export interface AdapterMeta {
+  /** The Repo's Kysely instance, on its pool. */
+  // biome-ignore lint/suspicious/noExplicitAny: any database
+  readonly kysely: Kysely<any>;
+  /** The number of connections in the Repo's pool. */
+  readonly poolSize: number;
+}
+
+/** A dialect: connections, SQL syntax and the driver's value representation. */
 export interface Adapter {
   readonly name: string;
   readonly syntax: SqlSyntax;
+  /** The pool size of a Repo that sets none. */
+  readonly defaultPoolSize: number;
+  /**
+   * The Kysely dialect connecting with `options` (Ecto's
+   * `Ecto.Adapter.init/1`). The Repo's pool hands out at most `poolSize`
+   * connections at once, so the dialect needs to open no more than that.
+   */
+  connect(options: ConnectionOptions, poolSize: number): Dialect;
   /**
    * Converts a value the driver returned into what the type loads (Ecto's
    * adapter loaders), e.g. a Postgres `int8` string into a number. Never
@@ -58,12 +110,11 @@ export interface Adapter {
   /**
    * Runs `fn` holding the lock that keeps two migrators from running the
    * same migration (Ecto's `lock_for_migrations/3`); `table` is the
-   * migrations table. `fn` runs its queries on `db`, not in the lock's
-   * transaction. Adapters without it run migrations unlocked.
+   * migrations table. `fn` runs its queries on `meta.kysely`, not in the
+   * lock's transaction. Adapters without it run migrations unlocked.
    */
   lockForMigrations?<T>(
-    // biome-ignore lint/suspicious/noExplicitAny: any database
-    db: Kysely<any>,
+    meta: AdapterMeta,
     table: string,
     fn: () => Promise<T>,
   ): Promise<T>;
@@ -134,15 +185,25 @@ export interface QueryEvent {
   readonly error: unknown;
 }
 
+/** What the executors of a Repo share. */
+export interface ExecutorContext {
+  /** The Repo's configuration, with its pool size. */
+  readonly config: { readonly poolSize: number };
+  readonly onQuery: ((event: QueryEvent) => void) | undefined;
+  /** Closes the Repo's connections. */
+  readonly stop: () => Promise<void>;
+}
+
 /**
- * Runs queries on one Kysely handle: the application's instance, or a
+ * Runs queries on one Kysely handle: the Repo's instance, or a
  * transaction or savepoint ekto started on it. Ecto finds the transaction
  * of the calling process implicitly; ekto passes it explicitly, as a Repo
  * bound to an `Executor` (design D7).
  */
 export class Executor<DB = unknown> {
   readonly db: Kysely<DB>;
-  readonly #onQuery: ((event: QueryEvent) => void) | undefined;
+  /** Shared by the executors of a Repo and its transactions. */
+  readonly context: ExecutorContext;
   /** 0 outside a transaction, 1 in one, more in savepoints. */
   readonly #depth: number;
   /**
@@ -151,14 +212,9 @@ export class Executor<DB = unknown> {
    */
   readonly #base: number;
 
-  constructor(
-    db: Kysely<DB>,
-    onQuery?: (event: QueryEvent) => void,
-    depth = 0,
-    base = 0,
-  ) {
+  constructor(db: Kysely<DB>, context: ExecutorContext, depth = 0, base = 0) {
     this.db = db;
-    this.#onQuery = onQuery;
+    this.context = context;
     this.#depth = depth;
     this.#base = base;
   }
@@ -182,7 +238,7 @@ export class Executor<DB = unknown> {
     if (this.#depth === 0) {
       const trx = await this.db.startTransaction().execute();
       return {
-        executor: new Executor(trx, this.#onQuery, depth, base),
+        executor: new Executor(trx, this.context, depth, base),
         end: async (ok) => {
           await (ok ? trx.commit() : trx.rollback()).execute();
         },
@@ -192,7 +248,7 @@ export class Executor<DB = unknown> {
     const trx = this.db as ControlledTransaction<DB>;
     const savepoint = await trx.savepoint(name).execute();
     return {
-      executor: new Executor(savepoint, this.#onQuery, depth, base),
+      executor: new Executor(savepoint, this.context, depth, base),
       end: async (ok) => {
         await (ok
           ? savepoint.releaseSavepoint(name)
@@ -229,7 +285,7 @@ export class Executor<DB = unknown> {
       error = e;
       throw e;
     } finally {
-      this.#onQuery?.({
+      this.context.onQuery?.({
         sql: compiled.sql,
         params: compiled.parameters,
         source,

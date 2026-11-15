@@ -4,11 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { pathToFileURL } from "node:url";
-import Database from "better-sqlite3";
-import { type Kysely, Kysely as KyselyClass, SqliteDialect, sql } from "kysely";
+import { type Kysely, sql } from "kysely";
 import type { Adapter } from "../adapter.ts";
-import { postgres } from "../postgres/index.ts";
 import { connectPg, skipWithoutPg } from "../postgres.test-helper.ts";
+import { createRepo, type Repo } from "../repo.ts";
 import { sqlite } from "../sqlite/index.ts";
 import {
   MigrationError,
@@ -80,26 +79,24 @@ async function has(db: AnyKysely, table: string, column = "*") {
 const versions = (run: readonly { version: number }[]) =>
   run.map((m) => m.version);
 
-function suite(adapter: Adapter, connect: () => AnyKysely) {
-  let db: AnyKysely;
-  const suffix = adapter.name;
+function suite(connect: () => Repo) {
+  const repo = connect();
+  const db = repo.kysely;
+  const suffix = repo.adapter.name;
   const migrations = makeMigrations(suffix);
   const source = `mig_schema_migrations_${suffix}`;
   const migrator = (m: Migrations = migrations) =>
-    createMigrator({ db, adapter, migrations: m, migrationSource: source });
+    createMigrator({ repo, migrations: m, migrationSource: source });
 
   const reset = async () => {
     for (const name of [posts(suffix), users(suffix), "mig_failed", source])
       await sql.raw(`DROP TABLE IF EXISTS "${name}"`).execute(db);
   };
 
-  before(async () => {
-    db = connect();
-    await reset();
-  });
+  before(reset);
   after(async () => {
     await reset();
-    await db.destroy();
+    await repo.stop();
   });
 
   test("migrates, reports status and rolls back", async () => {
@@ -302,8 +299,7 @@ function suite(adapter: Adapter, connect: () => AnyKysely) {
 
   test("loads migrations from a function", async () => {
     const m = createMigrator({
-      db,
-      adapter,
+      repo,
       migrations: async () => ({
         "1_loaded": migration({
           change(m) {
@@ -351,25 +347,19 @@ function suite(adapter: Adapter, connect: () => AnyKysely) {
 }
 
 describe("migrator on SQLite", () => {
-  suite(sqlite(), () => {
-    const database = new Database(":memory:");
-    database.pragma("foreign_keys = ON");
-    return new KyselyClass({ dialect: new SqliteDialect({ database }) });
-  });
+  suite(() => createRepo({ adapter: sqlite(), database: ":memory:" }));
 });
 
 describe("lock for migrations", () => {
-  const db = new KyselyClass({
-    dialect: new SqliteDialect({ database: new Database(":memory:") }),
-  });
   const locks: string[] = [];
   const adapter: Adapter = {
     ...sqlite(),
-    async lockForMigrations(_db, source, fn) {
+    async lockForMigrations(_meta, source, fn) {
       locks.push(source);
       return fn();
     },
   };
+  const repo = createRepo({ adapter, database: ":memory:" });
   const noop = (options: { disableMigrationLock?: boolean } = {}) =>
     migration({
       ...options,
@@ -377,13 +367,12 @@ describe("lock for migrations", () => {
         m.execute("SELECT 1", "SELECT 1");
       },
     });
-  after(() => db.destroy());
+  after(() => repo.stop());
 
   test("is taken for each migration going up and down", async () => {
     locks.length = 0;
     const m = createMigrator({
-      db,
-      adapter,
+      repo,
       migrations: { "1_a": noop(), "2_b": noop() },
     });
     await m.migrate();
@@ -395,15 +384,13 @@ describe("lock for migrations", () => {
   test("is not taken with disableMigrationLock or migrationLock: false", async () => {
     locks.length = 0;
     const m = createMigrator({
-      db,
-      adapter,
+      repo,
       migrations: { "1_a": noop({ disableMigrationLock: true }) },
     });
     await m.migrate();
     await m.rollback();
     const unlocked = createMigrator({
-      db,
-      adapter,
+      repo,
       migrations: { "1_a": noop() },
       migrationLock: false,
     });
@@ -415,10 +402,10 @@ describe("lock for migrations", () => {
 
 describe("migrator on Postgres", { skip: skipWithoutPg }, () => {
   if (skipWithoutPg) return;
-  suite(postgres(), () => connectPg().db);
+  suite(() => connectPg());
 
   test("concurrent migrators run each migration once", async () => {
-    const db = connectPg().db;
+    const repo = connectPg();
     const source = "mig_schema_migrations_concurrent";
     let runs = 0;
     const migrations: Migrations = {
@@ -432,12 +419,7 @@ describe("migrator on Postgres", { skip: skipWithoutPg }, () => {
       }),
     };
     const make = () =>
-      createMigrator({
-        db,
-        adapter: postgres(),
-        migrations,
-        migrationSource: source,
-      });
+      createMigrator({ repo, migrations, migrationSource: source });
     try {
       // The lock is on the migrations table, so it must exist first.
       await make().status();
@@ -445,8 +427,8 @@ describe("migrator on Postgres", { skip: skipWithoutPg }, () => {
       assert.equal(runs, 1);
       assert.equal(a.length + b.length, 1);
     } finally {
-      await sql.raw(`DROP TABLE IF EXISTS "${source}"`).execute(db);
-      await db.destroy();
+      await sql.raw(`DROP TABLE IF EXISTS "${source}"`).execute(repo.kysely);
+      await repo.stop();
     }
   });
 });
@@ -463,27 +445,19 @@ describe("migrator on a Postgres pool of one connection", {
       },
     }),
   };
-  let db: AnyKysely;
-  before(() => {
-    db = connectPg({ max: 1 }).db;
-  });
+  const repo = connectPg({ poolSize: 1 });
   after(async () => {
-    await sql.raw(`DROP TABLE IF EXISTS "${source}"`).execute(db);
-    await db.destroy();
+    await sql.raw(`DROP TABLE IF EXISTS "${source}"`).execute(repo.kysely);
+    await repo.stop();
   });
 
   test("raises when the pool is too small for the lock (Ecto's pool_size check)", async () => {
-    const m = createMigrator({
-      db,
-      adapter: postgres(),
-      migrations,
-      migrationSource: source,
-    });
+    const m = createMigrator({ repo, migrations, migrationSource: source });
     await assert.rejects(m.migrate(), (error: unknown) => {
       assert.ok(error instanceof MigrationError);
       assert.match(
         error.message,
-        /Migrations failed to run because no second connection was available within 2s/,
+        /Migrations failed to run because the connection pool size is less than 2/,
       );
       return true;
     });
@@ -496,8 +470,7 @@ describe("migrator on a Postgres pool of one connection", {
 
   test("does not raise without the lock", async () => {
     const m = createMigrator({
-      db,
-      adapter: postgres(),
+      repo,
       migrations,
       migrationSource: source,
       migrationLock: false,
@@ -544,21 +517,17 @@ describe("fileMigrations", () => {
     await writeFile(join(a, "10_ten.ts"), body);
     await writeFile(join(a, "nested", "12_twelve.ts"), body);
     await writeFile(join(b, "11_eleven.ts"), body);
-    const db = new KyselyClass({
-      dialect: new SqliteDialect({ database: new Database(":memory:") }),
-    });
+    const repo = createRepo({ adapter: sqlite(), database: ":memory:" });
     try {
       const m = createMigrator({
-        db,
-        adapter: sqlite(),
+        repo,
         migrations: fileMigrations([a, b]),
       });
       assert.deepEqual(versions(await m.migrate()), [10, 11, 12]);
       // Without b, its executed migration shows as missing (Ecto's status).
       assert.deepEqual(
         await createMigrator({
-          db,
-          adapter: sqlite(),
+          repo,
           migrations: fileMigrations(a),
         }).status(),
         [
@@ -568,7 +537,7 @@ describe("fileMigrations", () => {
         ],
       );
     } finally {
-      await db.destroy();
+      await repo.stop();
     }
 
     await writeFile(join(b, "10_ten.ts"), body);
