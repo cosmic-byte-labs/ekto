@@ -15,6 +15,7 @@ import {
   type Kysely,
 } from "kysely";
 import type { ConstraintType } from "./changeset.ts";
+import type { DdlCommand } from "./migrate/dsl.ts";
 import type { Queryable, SqlSyntax } from "./sql.ts";
 import type { PrimitiveType } from "./type.ts";
 
@@ -38,6 +39,11 @@ export interface Adapter {
    * is not a constraint violation (Ecto's `to_constraints/2`).
    */
   toConstraints(error: unknown): readonly ConstraintViolation[];
+  /**
+   * The SQL statements for a migration command (Ecto's `execute_ddl/1`).
+   * Adapters without it cannot run migrations.
+   */
+  ddl?(command: DdlCommand): readonly string[];
 }
 
 /** A constraint the database reported as violated. */

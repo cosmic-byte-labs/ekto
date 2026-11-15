@@ -7,6 +7,7 @@ import type { DriverValue, KyselyTables } from "../kysely.ts";
 import type { AnySchema } from "../schema.ts";
 import { quoteIdentifierAnsi, type SqlSyntax } from "../sql.ts";
 import type { PrimitiveType } from "../type.ts";
+import { sqliteDdl } from "./ddl.ts";
 
 /** How SQLite writes `sql` values: `?` placeholders and double-quoted identifiers. */
 export const sqliteSyntax: SqlSyntax = Object.freeze({
@@ -211,5 +212,8 @@ export function sqlite(): Adapter {
     load: loadValue,
     dump: dumpValue,
     toConstraints,
+    ddl: sqliteDdl,
   });
 }
+
+export { sqliteDdl };

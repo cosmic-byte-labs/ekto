@@ -20,7 +20,14 @@
     "./sqlite": {
       "types": "./dist/sqlite/index.d.ts",
       "default": "./dist/sqlite/index.js"
+    },
+    "./migrate": {
+      "types": "./dist/migrate/index.d.ts",
+      "default": "./dist/migrate/index.js"
     }
+  },
+  "bin": {
+    "ekto": "./dist/migrate/bin.js"
   },
   "files": [
     "dist/",
