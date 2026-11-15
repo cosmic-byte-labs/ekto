@@ -60,6 +60,7 @@ import {
   StaleEntryError,
 } from "./errors.ts";
 import type { DriverTypes, KyselyTable } from "./kysely.ts";
+import { Multi, type MultiResult, type Operation } from "./multi.ts";
 import {
   type AnyField,
   type AnySchema,
@@ -271,11 +272,11 @@ export interface RepoConfig<DB> {
 export interface Repo<DB = any> {
   readonly adapter: Adapter;
   /**
-   * The Kysely instance for the current transaction (or the root one), for
-   * queries ekto does not build.
+   * The Kysely instance this Repo runs on (a transaction's, for a Repo given
+   * by `transact` or as `changeset.repo`), for queries ekto does not build.
    */
   readonly kysely: Kysely<DB>;
-  /** Whether the current async context is inside a transaction. */
+  /** Whether this Repo runs in a transaction. */
   readonly inTransaction: boolean;
 
   /**
@@ -303,6 +304,19 @@ export interface Repo<DB = any> {
   updateOrThrow<D extends object>(
     changeset: Changeset<D>,
     options?: UpdateOptions<D>,
+  ): Promise<D>;
+
+  /**
+   * Inserts the changeset when its record was built, updates it when it was
+   * loaded (Ecto's `Repo.insert_or_update/2`).
+   */
+  insertOrUpdate<D extends object>(
+    changeset: Changeset<D>,
+    options?: InsertOptions<D> & UpdateOptions<D>,
+  ): Promise<WriteResult<D>>;
+  insertOrUpdateOrThrow<D extends object>(
+    changeset: Changeset<D>,
+    options?: InsertOptions<D> & UpdateOptions<D>,
   ): Promise<D>;
 
   /** Deletes a record or a changeset's record by primary key (Ecto's `Repo.delete/2`). */
@@ -417,6 +431,22 @@ export interface Repo<DB = any> {
     ) => Compilable<unknown>,
   ): Promise<{ readonly count: number }>;
 
+  /**
+   * Runs `fn` in a transaction with `tx`, a Repo bound to it (Ecto's
+   * `Repo.transact/2`). `fn` returns a result: `{ ok: true, … }` commits,
+   * `{ ok: false, … }` rolls back; either is returned. Throwing rolls back
+   * and rethrows. Called on a transaction's Repo, it uses a savepoint.
+   *
+   * Given a Multi, runs its operations in order and returns their results,
+   * or the failed step, its error and the changes before it.
+   */
+  transact<C extends Record<string, unknown>>(
+    multi: Multi<DB, C>,
+  ): Promise<MultiResult<C>>;
+  transact<R extends { readonly ok: boolean }>(
+    fn: (tx: Repo<DB>) => Promise<R>,
+  ): Promise<R>;
+
   /** Builds a loaded record from a raw database row (Ecto's `Repo.load/2`). */
   load<S extends AnySchema>(
     schema: S,
@@ -427,14 +457,29 @@ export interface Repo<DB = any> {
 type Entries = readonly (readonly [string, unknown])[];
 type Values = Readonly<Record<string, unknown>>;
 
+type ApplyWrite = (
+  changeset: AnyChangeset,
+  action: Action,
+  query: Queryable,
+  returning: readonly string[],
+  options: StaleOptions<object> & { readonly conflictNothing?: boolean },
+  source: string,
+) => Promise<ApplyResult>;
+
 type ApplyResult =
   | { readonly ok: true; readonly values: Values }
   | { readonly ok: false; readonly changeset: AnyChangeset };
 
 /** Creates a Repo running on the given Kysely instance (Ecto's `use Ecto.Repo`). */
 export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
-  const { adapter } = config;
-  const executor = new Executor(config.db, config.onQuery);
+  return bind(config.adapter, new Executor(config.db, config.onQuery)).repo;
+}
+
+/** A Repo running on one executor: the root, a transaction or a savepoint. */
+function bind<DB>(
+  adapter: Adapter,
+  executor: Executor<DB>,
+): { readonly repo: Repo<DB>; readonly applyWrite: ApplyWrite } {
   const loader: Loader = (type, value) => adapter.load(type.type, value);
 
   // -------------------------------------------------------------------------
@@ -501,18 +546,25 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
 
   /**
    * Runs a write in a transaction when it has prepare functions, rolling
-   * back when it fails (Ecto's `wrap_in_transaction`).
+   * back when it fails (Ecto's `wrap_in_transaction`). In a transaction
+   * already, a savepoint is used. The prepare functions get the
+   * transaction's Repo as `changeset.repo`, and `fn` its `applyWrite`.
    */
   function wrapInTransaction<D extends object>(
     changeset: AnyChangeset,
-    fn: () => Promise<WriteResult<D>>,
+    fn: (changeset: AnyChangeset, apply: ApplyWrite) => Promise<WriteResult<D>>,
   ): Promise<WriteResult<D>> {
-    if (changeset.prepare.length === 0 || executor.inTransaction) return fn();
-    return executor.transaction(async () => {
-      const result = await fn();
-      if (!result.ok) executor.rollback(result);
-      return result;
-    });
+    if (changeset.prepare.length === 0) return fn(changeset, applyWrite);
+    return executor.transaction(
+      (child) => {
+        const inner = bind(adapter, child);
+        return fn(
+          new Changeset({ ...changeset, repo: inner.repo }),
+          inner.applyWrite,
+        );
+      },
+      (result) => result.ok,
+    );
   }
 
   function returningFields(
@@ -863,8 +915,8 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
     changeset = putRepoAndAction(changeset, "insert");
     changeset = surfaceChanges(changeset, schema.persistedFields);
 
-    return wrapInTransaction(changeset, async () => {
-      const prepared = await runPrepare(changeset);
+    return wrapInTransaction(changeset, async (cs, apply) => {
+      const prepared = await runPrepare(cs);
       if (!prepared.valid) return { ok: false, changeset: prepared };
 
       const id = schema.autogenerateId;
@@ -885,7 +937,7 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
         onConflict,
         returnFields,
       );
-      const result = await applyWrite(
+      const result = await apply(
         prepared,
         "insert",
         query,
@@ -927,8 +979,8 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
     if (Object.keys(current.changes).length === 0 && !force)
       return { ok: true, value: current.data };
 
-    return wrapInTransaction(current, async () => {
-      const prepared = await runPrepare(current);
+    return wrapInTransaction(current, async (cs, apply) => {
+      const prepared = await runPrepare(cs);
       if (!prepared.valid) return { ok: false, changeset: prepared };
 
       const changes = pick(prepared.changes, schema.persistedFields);
@@ -948,7 +1000,7 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
           dumpFields("update", schema, Object.entries(filters)),
           returning,
         );
-        const result = await applyWrite(
+        const result = await apply(
           prepared,
           "update",
           query,
@@ -980,8 +1032,8 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
     const returning = returningFields(schema, options.returning);
     const current = putRepoAndAction(changeset, "delete");
 
-    return wrapInTransaction(current, async () => {
-      const prepared = await runPrepare(current);
+    return wrapInTransaction(current, async (cs, apply) => {
+      const prepared = await runPrepare(cs);
       if (!prepared.valid) return { ok: false, changeset: prepared };
 
       const filters = addPkFilter(
@@ -994,7 +1046,7 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
         dumpFields("delete", schema, Object.entries(filters)),
         returning,
       );
-      const result = await applyWrite(
+      const result = await apply(
         prepared,
         "delete",
         query,
@@ -1008,6 +1060,26 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
         value: loadChanges(prepared, "deleted", result.values, {}, schema),
       };
     });
+  }
+
+  function insertOrUpdate(
+    changeset: AnyChangeset,
+    options: InsertOptions<object> & UpdateOptions<object> = {},
+  ): Promise<WriteResult<object>> {
+    if (!isChangeset(changeset)) {
+      throw new TypeError(
+        "giving a record to Repo.insertOrUpdate is not supported; ekto cannot " +
+          "tell whether to insert or update it, a Changeset must be given instead",
+      );
+    }
+    const state = getMeta(changeset.data)?.state;
+    if (state === "built") return insert(changeset, options);
+    if (state === "loaded") return update(changeset, options);
+    throw new TypeError(
+      state === "deleted"
+        ? "the changeset's record has been deleted"
+        : "cannot insert or update schemaless data",
+    );
   }
 
   async function orThrow(
@@ -1342,6 +1414,169 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
     return { count: result.numAffectedRows ?? result.rows.length };
   }
 
+  // -------------------------------------------------------------------------
+  // Transactions and Multi
+  // -------------------------------------------------------------------------
+
+  async function transact(input: unknown): Promise<unknown> {
+    if (input instanceof Multi) return transactMulti(input);
+    if (typeof input !== "function") {
+      throw new TypeError(
+        `Repo.transact expects a function or a Multi, got: ${inspect(input)}`,
+      );
+    }
+    return executor.transaction(
+      async (child) => {
+        const result: unknown = await input(bind(adapter, child).repo);
+        if (!isResult(result)) {
+          throw new TypeError(
+            "expected the function given to Repo.transact to return " +
+              `{ ok: true, … } or { ok: false, … }, got: ${inspect(result)}`,
+          );
+        }
+        return result;
+      },
+      (result) => result.ok,
+    );
+  }
+
+  async function transactMulti(
+    multi: Multi,
+  ): Promise<MultiResult<Record<string, unknown>>> {
+    const operations = multi.toList();
+    const invalid = invalidChangeset(operations);
+    if (invalid) return { ...invalid, changesSoFar: {} };
+    return executor.transaction(
+      (child) => runOperations(bind(adapter, child).repo, operations, {}),
+      (result) => result.ok,
+    );
+  }
+
+  /** A changeset given to the Multi that is invalid before anything runs. */
+  function invalidChangeset(
+    operations: readonly (readonly [string | undefined, Operation])[],
+  ): { ok: false; step: string; error: AnyChangeset } | undefined {
+    for (const [name, operation] of operations) {
+      if (
+        operation.kind === "changeset" &&
+        isChangeset(operation.input) &&
+        !operation.input.valid
+      ) {
+        const error = putRepoAndAction(
+          operation.input,
+          operation.input.action ?? "insert",
+        );
+        return { ok: false, step: name ?? "", error };
+      }
+    }
+    return undefined;
+  }
+
+  async function runOperations(
+    tx: Repo,
+    operations: readonly (readonly [string | undefined, Operation])[],
+    initial: Record<string, unknown>,
+  ): Promise<MultiResult<Record<string, unknown>>> {
+    const changes: Record<string, unknown> = { ...initial };
+    const fail = (step: string, error: unknown) =>
+      ({ ok: false, step, error, changesSoFar: { ...changes } }) as const;
+
+    for (const [name = "", operation] of operations) {
+      switch (operation.kind) {
+        case "changeset": {
+          const input =
+            typeof operation.input === "function"
+              ? operation.input(changes)
+              : operation.input;
+          const options = operation.options as never;
+          const result = await (operation.action === "insert"
+            ? tx.insert(input, options)
+            : operation.action === "update"
+              ? tx.update(input as AnyChangeset, options)
+              : operation.action === "delete"
+                ? tx.delete(input, options)
+                : tx.insertOrUpdate(input as AnyChangeset, options));
+          if (!result.ok) return fail(name, result.changeset);
+          changes[name] = result.value;
+          break;
+        }
+        case "insertAll": {
+          const entries =
+            typeof operation.entries === "function"
+              ? operation.entries(changes)
+              : operation.entries;
+          changes[name] = await tx.insertAll(
+            operation.schema,
+            entries as never,
+            operation.options,
+          );
+          break;
+        }
+        case "updateAll": {
+          const { refine } = operation;
+          changes[name] = await tx.updateAll(
+            operation.schema,
+            operation.updates,
+            refine && ((query) => refine(query as never, changes)),
+          );
+          break;
+        }
+        case "deleteAll": {
+          const { refine } = operation;
+          changes[name] = await tx.deleteAll(
+            operation.schema,
+            refine && ((query) => refine(query as never, changes)),
+          );
+          break;
+        }
+        case "run": {
+          const result: unknown = await operation.fn(tx, changes);
+          if (!isResult(result) || !("value" in result || "error" in result)) {
+            throw new TypeError(
+              `expected the Multi function named ${JSON.stringify(name)} to return ` +
+                `{ ok: true, value } or { ok: false, error }, got: ${inspect(result)}`,
+            );
+          }
+          if (!result.ok)
+            return fail(name, (result as { error: unknown }).error);
+          changes[name] = (result as { value: unknown }).value;
+          break;
+        }
+        case "put":
+          changes[name] = operation.value;
+          break;
+        case "error":
+          return fail(name, operation.value);
+        case "merge": {
+          const merged: unknown = await operation.fn(changes);
+          if (!(merged instanceof Multi)) {
+            throw new TypeError(
+              `expected the function given to Multi.merge to return a Multi, got: ${inspect(merged)}`,
+            );
+          }
+          const nested = merged.toList();
+          const duplicates = nested.filter(
+            ([n]) => n !== undefined && Object.hasOwn(changes, n),
+          );
+          if (duplicates.length > 0) {
+            throw new TypeError(
+              `the Multi given to merge has operations named ${duplicates
+                .map(([n]) => JSON.stringify(n))
+                .join(", ")} already`,
+            );
+          }
+          const invalid = invalidChangeset(nested);
+          if (invalid) return { ...invalid, changesSoFar: { ...changes } };
+          const result = await runOperations(tx, nested, changes);
+          if (!result.ok) return result;
+          Object.assign(changes, result.value);
+          break;
+        }
+      }
+    }
+    return { ok: true, value: changes };
+  }
+
   const repo: Repo<DB> = {
     adapter,
     get kysely() {
@@ -1359,6 +1594,15 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
       options?: UpdateOptions<object>,
     ) =>
       orThrow("update", update(changeset, options))) as Repo["updateOrThrow"],
+    insertOrUpdate: insertOrUpdate as Repo["insertOrUpdate"],
+    insertOrUpdateOrThrow: ((
+      changeset: AnyChangeset,
+      options?: InsertOptions<object> & UpdateOptions<object>,
+    ) =>
+      orThrow(
+        getMeta(changeset.data)?.state === "loaded" ? "update" : "insert",
+        insertOrUpdate(changeset, options),
+      )) as Repo["insertOrUpdateOrThrow"],
     delete: remove as Repo["delete"],
     deleteOrThrow: ((input: object, options?: DeleteOptions<object>) =>
       orThrow("delete", remove(input, options))) as Repo["deleteOrThrow"],
@@ -1383,10 +1627,20 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
     insertAll: insertAll as Repo["insertAll"],
     updateAll: updateAll as Repo["updateAll"],
     deleteAll: deleteAll as Repo["deleteAll"],
+    transact: transact as Repo["transact"],
     load: ((schema: AnySchema, row: Values) =>
       load(schema, row, loader)) as Repo["load"],
   };
-  return Object.freeze(repo);
+  return { repo: Object.freeze(repo), applyWrite };
+}
+
+/** Whether `value` is a result: an object with a boolean `ok`. */
+function isResult(value: unknown): value is { readonly ok: boolean } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { ok?: unknown }).ok === "boolean"
+  );
 }
 
 /** Kysely's own `sql` tag, which compiles with a Kysely instance. */

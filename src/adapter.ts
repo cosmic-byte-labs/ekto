@@ -8,8 +8,12 @@
  * (Ecto's adapter `loaders/2` and `dumpers/2`).
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
-import { CompiledQuery, isCompiledQuery, type Kysely } from "kysely";
+import {
+  CompiledQuery,
+  type ControlledTransaction,
+  isCompiledQuery,
+  type Kysely,
+} from "kysely";
 import type { ConstraintType } from "./changeset.ts";
 import type { Queryable, SqlSyntax } from "./sql.ts";
 import type { PrimitiveType } from "./type.ts";
@@ -59,41 +63,35 @@ export interface QueryEvent {
   readonly error: unknown;
 }
 
-/** Thrown inside a transaction to roll it back with a value (Ecto's `rollback/1`). */
-class Rollback {
-  readonly value: unknown;
-  constructor(value: unknown) {
-    this.value = value;
-  }
-}
-
 /**
- * Runs queries on a Kysely instance, following the transaction the current
- * async context is in (Ecto keeps the connection in the process dictionary;
- * Node has `AsyncLocalStorage`).
+ * Runs queries on one Kysely handle: the application's instance, or a
+ * transaction or savepoint ekto started on it. Ecto finds the transaction
+ * of the calling process implicitly; ekto passes it explicitly, as a Repo
+ * bound to an `Executor` (design D7).
  */
 export class Executor<DB = unknown> {
-  readonly #root: Kysely<DB>;
-  readonly #current = new AsyncLocalStorage<Kysely<DB>>();
+  readonly db: Kysely<DB>;
   readonly #onQuery: ((event: QueryEvent) => void) | undefined;
+  /** 0 outside a transaction, 1 in one, more in savepoints. */
+  readonly #depth: number;
 
-  constructor(db: Kysely<DB>, onQuery?: (event: QueryEvent) => void) {
-    this.#root = db;
+  constructor(
+    db: Kysely<DB>,
+    onQuery?: (event: QueryEvent) => void,
+    depth = 0,
+  ) {
+    this.db = db;
     this.#onQuery = onQuery;
-  }
-
-  /** The Kysely instance of the current transaction, or the root one. */
-  get db(): Kysely<DB> {
-    return this.#current.getStore() ?? this.#root;
+    this.#depth = depth;
   }
 
   get inTransaction(): boolean {
-    return this.db.isTransaction;
+    return this.#depth > 0;
   }
 
   /**
-   * Runs a query on the current connection. A Kysely `CompiledQuery` is run
-   * as is, so plugins see the query they compiled.
+   * Runs a query on this handle. A Kysely `CompiledQuery` is run as is, so
+   * plugins see the query they compiled.
    */
   async execute(
     query: Queryable | CompiledQuery,
@@ -129,26 +127,45 @@ export class Executor<DB = unknown> {
   }
 
   /**
-   * Runs `fn` in a transaction. Inside a transaction already, `fn` runs in
-   * that one, as Ecto's nested transactions do. Throwing rolls back and
-   * rethrows; `rollback(value)` rolls back and makes this return `value`.
+   * Runs `fn` with an executor in a new transaction, or in a savepoint when
+   * this one is already in a transaction. Commits (or releases the
+   * savepoint) when `commit(result)` holds, rolls back otherwise, and rolls
+   * back and rethrows when `fn` throws.
    */
-  async transaction<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.inTransaction) return fn();
-    try {
-      return await this.#root
-        .transaction()
-        .execute((trx) => this.#current.run(trx, fn));
-    } catch (e) {
-      if (e instanceof Rollback) return e.value as T;
-      throw e;
+  async transaction<T>(
+    fn: (executor: Executor<DB>) => Promise<T>,
+    commit: (result: T) => boolean,
+  ): Promise<T> {
+    const depth = this.#depth + 1;
+    let done: (ok: boolean) => Promise<unknown>;
+    let handle: Kysely<DB>;
+    if (this.#depth === 0) {
+      const trx = await this.db.startTransaction().execute();
+      handle = trx;
+      done = (ok) => (ok ? trx.commit() : trx.rollback()).execute();
+    } else {
+      const name = `ekto_savepoint_${depth}`;
+      const trx = this.db as ControlledTransaction<DB>;
+      const savepoint = await trx.savepoint(name).execute();
+      handle = savepoint;
+      done = (ok) =>
+        (ok
+          ? savepoint.releaseSavepoint(name)
+          : savepoint.rollbackToSavepoint(name)
+        ).execute();
     }
-  }
-
-  /** Rolls back the current transaction; `transaction` returns `value`. */
-  rollback(value: unknown): never {
-    if (!this.inTransaction)
-      throw new Error("cannot call rollback outside of transaction");
-    throw new Rollback(value);
+    let result: T;
+    try {
+      result = await fn(new Executor(handle, this.#onQuery, depth));
+    } catch (error) {
+      try {
+        await done(false);
+      } catch {
+        // Keep the original error; the connection is likely broken.
+      }
+      throw error;
+    }
+    await done(commit(result));
+    return result;
   }
 }

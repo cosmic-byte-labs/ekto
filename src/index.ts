@@ -27,6 +27,12 @@ export type {
   KyselyTables,
 } from "./kysely.ts";
 export {
+  Multi,
+  type MultiResult,
+  type Operation,
+  type RunResult,
+} from "./multi.ts";
+export {
   createRepo,
   type DeleteOptions,
   type ExecResult,

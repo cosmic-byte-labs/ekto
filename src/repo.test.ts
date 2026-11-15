@@ -27,6 +27,7 @@ import {
   SchemaMismatchError,
   StaleEntryError,
 } from "./errors.ts";
+import { Multi } from "./multi.ts";
 import { type KyselyDB, postgres } from "./postgres/index.ts";
 import { connectPg, skipWithoutPg } from "./postgres.test-helper.ts";
 import { createRepo, type Repo } from "./repo.ts";
@@ -472,10 +473,14 @@ describe("Repo on Postgres", { skip: skipWithoutPg }, () => {
       queries = [];
       const updated = await Repo.updateOrThrow(
         prepareChanges(change(user, { name: "Ann" }), async (cs) => {
-          assert.equal(cs.repo, Repo);
-          assert.ok(Repo.inTransaction);
-          const count = await raw("SELECT count(*)::int AS n FROM repo_users");
-          return putChange(cs, "age", count[0]?.n as number);
+          const tx = cs.repo as Repo;
+          assert.notEqual(tx, Repo);
+          assert.ok(tx.inTransaction);
+          assert.ok(!Repo.inTransaction);
+          const { rows } = await tx.query(
+            sql`SELECT count(*)::int AS n FROM repo_users`,
+          );
+          return putChange(cs, "age", rows[0]?.n as number);
         }),
       );
       assert.equal(updated.age, 1);
@@ -735,8 +740,9 @@ describe("Repo on Postgres", { skip: skipWithoutPg }, () => {
           prepareChanges(
             change(await Repo.getOrThrow(User, 1), { name: "x" }),
             async (cs) => {
-              await Repo.exec(sql`DELETE FROM repo_users`);
-              assert.equal((await Repo.all(User)).length, 0);
+              const tx = cs.repo as Repo;
+              await tx.exec(sql`DELETE FROM repo_users`);
+              assert.equal((await tx.all(User)).length, 0);
               return addError(cs, "name", "rolled back");
             },
           ),
@@ -950,6 +956,289 @@ describe("Repo on Postgres", { skip: skipWithoutPg }, () => {
     });
   });
 
+  describe("insertOrUpdate", () => {
+    test("inserts built records and updates loaded ones", async () => {
+      const inserted = await Repo.insertOrUpdateOrThrow(
+        userChangeset(User.new(), { email: "ann@example.com" }),
+      );
+      assert.equal(inserted.id, 1);
+      const updated = await Repo.insertOrUpdateOrThrow(
+        change(inserted, { name: "Ann" }),
+      );
+      assert.equal(updated.name, "Ann");
+      assert.equal((await Repo.all(User)).length, 1);
+    });
+
+    test("rejects records and deleted records", async () => {
+      const user = await insertUser();
+      assert.throws(
+        // @ts-expect-error: a changeset is required
+        () => Repo.insertOrUpdate(user),
+        /a Changeset must be given/,
+      );
+      const deleted = await Repo.deleteOrThrow(user);
+      assert.throws(
+        () => Repo.insertOrUpdate(change(deleted, { name: "x" })),
+        /has been deleted/,
+      );
+    });
+  });
+
+  describe("transact", () => {
+    const count = async () => (await Repo.all(User)).length;
+
+    test("commits an ok result and returns it", async () => {
+      const result = await Repo.transact(async (tx) => {
+        assert.ok(tx.inTransaction);
+        assert.ok(tx.kysely.isTransaction);
+        assert.ok(!Repo.inTransaction);
+        const user = await tx.insertOrThrow(
+          userChangeset(User.new(), { email: "ann@example.com" }),
+        );
+        return { ok: true, value: user } as const;
+      });
+      assert.ok(result.ok);
+      assert.equal(result.value.email, "ann@example.com");
+      assert.equal(await count(), 1);
+      assert.ok(
+        queries.some((q) => q.sql.startsWith("INSERT")),
+        "transactions report queries to onQuery",
+      );
+    });
+
+    test("rolls back an error result and returns it", async () => {
+      const result = await Repo.transact(async (tx) => {
+        await tx.insertOrThrow(
+          userChangeset(User.new(), { email: "ann@example.com" }),
+        );
+        return { ok: false, error: "nope" } as const;
+      });
+      assert.deepEqual(result, { ok: false, error: "nope" });
+      assert.equal(await count(), 0);
+    });
+
+    test("rolls back and rethrows when the function throws", async () => {
+      await assert.rejects(
+        Repo.transact(async (tx) => {
+          await tx.insertOrThrow(
+            userChangeset(User.new(), { email: "ann@example.com" }),
+          );
+          throw new Error("boom");
+        }),
+        /boom/,
+      );
+      assert.equal(await count(), 0);
+    });
+
+    test("requires a result", async () => {
+      await assert.rejects(
+        // @ts-expect-error: the function must return a result
+        Repo.transact(async () => 42),
+        /to return \{ ok: true, … \} or \{ ok: false, … \}, got: 42/,
+      );
+      await assert.rejects(
+        // @ts-expect-error: a function or a Multi
+        Repo.transact("nope"),
+        /expects a function or a Multi/,
+      );
+    });
+
+    test("nested transactions use savepoints", async () => {
+      const result = await Repo.transact(async (tx) => {
+        await tx.insertOrThrow(
+          userChangeset(User.new(), { email: "ann@example.com" }),
+        );
+        const inner = await tx.transact(async (tx2) => {
+          assert.notEqual(tx2, tx);
+          await tx2.insertOrThrow(
+            userChangeset(User.new(), { email: "bob@example.com" }),
+          );
+          return { ok: false } as const;
+        });
+        assert.ok(!inner.ok);
+        assert.equal((await tx.all(User)).length, 1);
+        await assert.rejects(
+          tx.transact(async () => {
+            throw new Error("inner");
+          }),
+          /inner/,
+        );
+        return { ok: true } as const;
+      });
+      assert.ok(result.ok);
+      assert.deepEqual(
+        (await Repo.all(User)).map((u) => u.email),
+        ["ann@example.com"],
+      );
+    });
+
+    test("prepare functions in a transaction use a savepoint", async () => {
+      await Repo.transact(async (tx) => {
+        const user = await tx.insertOrThrow(
+          userChangeset(User.new(), { email: "ann@example.com" }),
+        );
+        const result = await tx.update(
+          prepareChanges(change(user, { name: "x" }), async (cs) => {
+            const inner = cs.repo as Repo;
+            assert.notEqual(inner, tx);
+            assert.ok(inner.inTransaction);
+            await inner.insertOrThrow(
+              userChangeset(User.new(), { email: "bob@example.com" }),
+            );
+            return addError(cs, "name", "is bad");
+          }),
+        );
+        assert.ok(!result.ok);
+        assert.equal((await tx.all(User)).length, 1);
+        return { ok: true } as const;
+      });
+      assert.equal(await count(), 1);
+    });
+  });
+
+  describe("Multi", () => {
+    const ann = () => userChangeset(User.new(), { email: "ann@example.com" });
+
+    test("runs operations in order, passing the changes", async () => {
+      const multi = Multi.new<DB>()
+        .insert("user", ann())
+        .insert("post", ({ user }) =>
+          Post.new({ title: "Hi", user_id: user.id }),
+        )
+        .update("renamed", ({ user }) => change(user, { name: "Ann" }))
+        .put("answer", 42)
+        .run("count", async (tx, { answer }) => ({
+          ok: true,
+          value: (await tx.all(Post)).length + answer,
+        }))
+        .insertAll("more", Post, ({ user }) => [
+          { title: "a", user_id: user.id as number },
+          { title: "b", user_id: user.id as number },
+        ])
+        .updateAll("touched", Post, { set: { title: "t" } }, (q, { post }) =>
+          q.where("id", "!=", String(post.id)),
+        )
+        .deleteAll("deleted", Post, (q, { post }) =>
+          q.where("id", "=", String(post.id)),
+        );
+      const result = await Repo.transact(multi);
+      assert.ok(result.ok);
+      const { value } = result;
+      type _ = Expect<Equal<typeof value.answer, number>>;
+      assert.equal(value.user.email, "ann@example.com");
+      assert.equal(value.renamed.name, "Ann");
+      assert.equal(value.post.user_id, value.user.id);
+      assert.equal(value.count, 43);
+      assert.equal(value.more.count, 2);
+      assert.deepEqual(value.touched, { count: 2 });
+      assert.deepEqual(value.deleted, { count: 1 });
+      assert.deepEqual(
+        (await Repo.all(Post)).map((p) => p.title),
+        ["t", "t"],
+      );
+    });
+
+    test("invalid changesets fail before any query", async () => {
+      const result = await Repo.transact(
+        Multi.new()
+          .insert("ok", ann())
+          .insert("bad", userChangeset(User.new(), {})),
+      );
+      assert.ok(!result.ok);
+      assert.equal(result.step, "bad");
+      assert.deepEqual(result.changesSoFar, {});
+      const error = result.error as Changeset<object>;
+      assert.equal(error.action, "insert");
+      assert.equal(error.repo, Repo);
+      assert.deepEqual(queries, []);
+    });
+
+    test("a failing step rolls back and reports the changes before it", async () => {
+      const result = await Repo.transact(
+        Multi.new()
+          .insert("user", ann())
+          .insert("dup", pipe(ann(), uniqueConstraint("email")))
+          .put("never", 1),
+      );
+      assert.ok(!result.ok);
+      assert.equal(result.step, "dup");
+      assert.equal(
+        (result.changesSoFar.user as { email: string }).email,
+        "ann@example.com",
+      );
+      assert.deepEqual(
+        (result.error as Changeset<object>).errors.map((e) => e.field),
+        ["email"],
+      );
+      assert.equal((await Repo.all(User)).length, 0);
+    });
+
+    test("run and error steps fail with their value", async () => {
+      const failing = await Repo.transact(
+        Multi.new()
+          .insert("user", ann())
+          .run("check", () => ({ ok: false, error: "too many" })),
+      );
+      assert.ok(!failing.ok);
+      assert.equal(failing.step, "check");
+      assert.equal(failing.error, "too many");
+      assert.equal((await Repo.all(User)).length, 0);
+
+      const errored = await Repo.transact(
+        Multi.new().put("a", 1).error("stop", "reason").put("b", 2),
+      );
+      assert.deepEqual(errored, {
+        ok: false,
+        step: "stop",
+        error: "reason",
+        changesSoFar: { a: 1 },
+      });
+
+      await assert.rejects(
+        // @ts-expect-error: run must return a result
+        Repo.transact(Multi.new().run("bad", () => 1)),
+        /Multi function named "bad"/,
+      );
+    });
+
+    test("merge runs a Multi built from the changes", async () => {
+      const result = await Repo.transact(
+        Multi.new<DB>()
+          .insert("user", ann())
+          .merge(({ user }) =>
+            Multi.new<DB>().insert(
+              "post",
+              Post.new({ title: "Hi", user_id: user.id }),
+            ),
+          )
+          .put("after", true),
+      );
+      assert.ok(result.ok);
+      assert.equal(result.value.post.title, "Hi");
+      assert.equal(result.value.after, true);
+
+      const failing = await Repo.transact(
+        Multi.new<DB>()
+          .put("a", 1)
+          .merge(() =>
+            Multi.new().insert("bad", userChangeset(User.new(), {})),
+          ),
+      );
+      assert.ok(!failing.ok);
+      assert.equal(failing.step, "bad");
+      assert.deepEqual(failing.changesSoFar, { a: 1 });
+
+      await assert.rejects(
+        Repo.transact(
+          Multi.new()
+            .put("a", 1)
+            .merge(() => Multi.new().put("a", 2)),
+        ),
+        /operations named "a" already/,
+      );
+    });
+  });
+
   test("load builds records from raw Kysely rows", async () => {
     await insertUser();
     const row = await db
@@ -968,7 +1257,8 @@ describe("Repo on Postgres", { skip: skipWithoutPg }, () => {
       prepareChanges(
         change(await Repo.getOrThrow(User, 1), { name: "x" }),
         async (cs) => {
-          assert.ok(Repo.kysely.isTransaction);
+          assert.ok((cs.repo as Repo).kysely.isTransaction);
+          assert.ok(!Repo.kysely.isTransaction);
           return cs;
         },
       ),
