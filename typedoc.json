@@ -24,7 +24,15 @@
     "guides/migrations/backfilling-data.md",
     "guides/migrations/squashing-migrations.md"
   ],
-  "highlightLanguages": ["bash", "js", "json", "sql", "ts", "typescript"],
+  "highlightLanguages": [
+    "bash",
+    "diff",
+    "js",
+    "json",
+    "sql",
+    "ts",
+    "typescript"
+  ],
   "groupOrder": [
     "Introduction",
     "How-To's",
