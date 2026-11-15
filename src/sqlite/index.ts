@@ -4,6 +4,13 @@
 
 import type { DriverValue, KyselyTables } from "../kysely.ts";
 import type { AnySchema } from "../schema.ts";
+import { quoteIdentifierAnsi, type SqlSyntax } from "../sql.ts";
+
+/** How SQLite writes `sql` values: `?` placeholders and double-quoted identifiers. */
+export const sqliteSyntax: SqlSyntax = Object.freeze({
+  placeholder: () => "?",
+  quoteIdentifier: quoteIdentifierAnsi,
+});
 
 /**
  * What better-sqlite3 (Kysely's `SqliteDialect`) returns, for the storage

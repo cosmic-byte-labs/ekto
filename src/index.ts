@@ -32,6 +32,13 @@ export {
   t,
   type ValueOfField,
 } from "./schema.ts";
+export {
+  isQueryable,
+  type Queryable,
+  Sql,
+  type SqlSyntax,
+  sql,
+} from "./sql.ts";
 /** The built-in types, for use in custom types and schemaless changesets. */
 export * as types from "./type.ts";
 export {

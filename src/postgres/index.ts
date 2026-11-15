@@ -4,6 +4,13 @@
 
 import type { DriverValue, KyselyTables } from "../kysely.ts";
 import type { AnySchema } from "../schema.ts";
+import { quoteIdentifierAnsi, type SqlSyntax } from "../sql.ts";
+
+/** How PostgreSQL writes `sql` values: `$1`, `$2`… and double-quoted identifiers. */
+export const postgresSyntax: SqlSyntax = Object.freeze({
+  placeholder: (index: number) => `$${index + 1}`,
+  quoteIdentifier: quoteIdentifierAnsi,
+});
 
 /**
  * What node-postgres (`pg`, Kysely's `PostgresDialect`) returns with its
