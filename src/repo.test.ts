@@ -747,6 +747,209 @@ describe("Repo on Postgres", { skip: skipWithoutPg }, () => {
     });
   });
 
+  describe("upserts", () => {
+    test("onConflict nothing returns the record without reading back", async () => {
+      const ann = await insertUser({ name: "Ann" });
+      const result = await Repo.insert(
+        userChangeset(User.new(), { email: ann.email, name: "Other" }),
+        { onConflict: "nothing", conflictTarget: ["email"] },
+      );
+      assert.ok(result.ok);
+      assert.equal(result.value.id, null, "nothing was inserted");
+      assert.equal(result.value.name, "Other");
+      assert.match(
+        queries.at(-1)?.sql ?? "",
+        /ON CONFLICT \("email"\) DO NOTHING/,
+      );
+      assert.equal((await Repo.getOrThrow(User, ann.id)).name, "Ann");
+    });
+
+    test("onConflict replace updates the existing row", async () => {
+      const ann = await insertUser({ name: "Ann", age: 30 });
+      const result = await Repo.insertOrThrow(
+        userChangeset(User.new(), { email: ann.email, name: "Anne", age: 31 }),
+        { onConflict: { replace: ["name"] }, conflictTarget: ["email"] },
+      );
+      assert.equal(result.id, ann.id, "the existing row's id is read back");
+      const loaded = await Repo.getOrThrow(User, ann.id);
+      assert.equal(loaded.name, "Anne");
+      assert.equal(loaded.age, 30, "only the given fields are replaced");
+
+      await Repo.insertOrThrow(
+        userChangeset(User.new(), { email: ann.email, name: "Annie" }),
+        {
+          onConflict: { replaceAllExcept: ["id", "inserted_at", "token"] },
+          conflictTarget: { unsafeFragment: "(email)" },
+        },
+      );
+      const replaced = await Repo.getOrThrow(User, ann.id);
+      assert.equal(replaced.name, "Annie");
+      assert.equal(replaced.age, null, "unset fields are replaced too");
+      assert.equal(replaced.token, ann.token);
+    });
+
+    test("checks the conflict options like Ecto", async () => {
+      const cs = userChangeset(User.new(), { email: "a@b.c" });
+      await assert.rejects(
+        Repo.insert(cs, { conflictTarget: ["email"] }),
+        /conflictTarget is forbidden/,
+      );
+      await assert.rejects(
+        Repo.insert(cs, { onConflict: "replaceAll" }),
+        /conflictTarget option is required/,
+      );
+      await assert.rejects(
+        Repo.insert(cs, {
+          onConflict: "nothing",
+          // @ts-expect-error: not a field
+          conflictTarget: ["nope"],
+        }),
+        /field nope does not exist/,
+      );
+      assert.equal(queries.length, 0);
+    });
+  });
+
+  describe("insertAll, updateAll and deleteAll", () => {
+    const now = new Date("2026-01-02T03:04:05Z");
+    const userRow = (email: string, extra: object = {}) => ({
+      email,
+      token: "6b1f0f8c-0b8f-4c4e-9d50-6f1a3cbe7a2e",
+      inserted_at: now,
+      updated_at: now,
+      ...extra,
+    });
+
+    test("insertAll inserts rows, using column defaults for missing values", async () => {
+      const result = await Repo.insertAll(
+        User,
+        [
+          userRow("ann@example.com", { age: 30, tags: ["x"] }),
+          userRow("bob@example.com", { settings: { a: 1 } }),
+        ],
+        { returning: true },
+      );
+      type _rows = Expect<Equal<typeof result.rows, Infer<typeof User>[]>>;
+      assert.equal(result.count, 2);
+      const [ann, bob] = result.rows;
+      assert.equal(ann?.id, 1);
+      assert.deepEqual(ann?.tags, ["x"]);
+      assert.deepEqual(bob?.tags, [], "DEFAULT for the missing cell");
+      assert.equal(bob?.age, null);
+      assert.deepEqual(bob?.settings, { a: 1 });
+      assert.deepEqual(bob?.inserted_at, now);
+      assert.equal(getMeta(bob ?? {})?.state, "loaded");
+      assert.match(queries[0]?.sql ?? "", /, DEFAULT/);
+
+      const plain = await Repo.insertAll(Post, [
+        { title: "a", user_id: 1 },
+        { title: "b", user_id: 2 },
+      ]);
+      assert.deepEqual(plain, { count: 2, rows: [] });
+      assert.deepEqual(await Repo.insertAll(Post, []), { count: 0, rows: [] });
+    });
+
+    test("insertAll dumps without casting and throws on violations", async () => {
+      await assert.rejects(
+        // @ts-expect-error: insertAll does not cast
+        Repo.insertAll(Post, [{ title: "a", user_id: "1" }]),
+        ChangeError,
+      );
+      await assert.rejects(
+        // @ts-expect-error: virtual fields cannot be inserted
+        Repo.insertAll(User, [{ ...userRow("a@b.c"), password: "x" }]),
+        /field password does not exist in schema repo_users or is virtual/,
+      );
+      await assert.rejects(
+        Repo.insertAll(Post, [{ title: "a", user_id: 99 }]),
+        (error: unknown) =>
+          error instanceof ConstraintError &&
+          error.type === "foreign_key" &&
+          /attempting to insert/.test(error.message),
+      );
+    });
+
+    test("insertAll upserts", async () => {
+      await Repo.insertAll(User, [userRow("ann@example.com", { age: 1 })]);
+      const result = await Repo.insertAll(
+        User,
+        [
+          userRow("ann@example.com", { age: 2 }),
+          userRow("bob@example.com", { age: 3 }),
+        ],
+        {
+          onConflict: { replace: ["age"] },
+          conflictTarget: ["email"],
+          returning: ["email", "age"],
+        },
+      );
+      assert.deepEqual(
+        result.rows.map((u) => [u.email, u.age]),
+        [
+          ["ann@example.com", 2],
+          ["bob@example.com", 3],
+        ],
+      );
+      const skipped = await Repo.insertAll(User, [userRow("ann@example.com")], {
+        onConflict: "nothing",
+      });
+      assert.equal(skipped.count, 0);
+    });
+
+    test("updateAll casts, dumps and refines with Kysely", async () => {
+      await insertUser({ age: 20 });
+      await insertUser({ email: "bob@example.com", age: 40 });
+      const result = await Repo.updateAll(
+        User,
+        // @ts-expect-error: like Ecto, values are cast at runtime ("31" → 31)
+        { set: { name: "x", age: "31" }, inc: { lock_version: 2 } },
+        (q) => q.where("age", "<", 30),
+      );
+      assert.deepEqual(result, { count: 1 });
+      const ann = await Repo.getOrThrow(User, 1);
+      assert.deepEqual([ann.name, ann.age, ann.lock_version], ["x", 31, 3]);
+      assert.equal((await Repo.getOrThrow(User, 2)).name, null);
+
+      const all = await Repo.updateAll(User, {
+        set: { settings: { b: true }, birthday: "2000-01-01" },
+      });
+      assert.equal(all.count, 2);
+      assert.deepEqual((await Repo.getOrThrow(User, 2)).settings, { b: true });
+    });
+
+    test("updateAll rejects bad updates before querying", async () => {
+      await assert.rejects(
+        // @ts-expect-error: not an integer
+        Repo.updateAll(User, { set: { age: "abc" } }),
+        /value 'abc' in update cannot be cast to type integer/,
+      );
+      await assert.rejects(Repo.updateAll(User, {}), /at least one field/);
+      await assert.rejects(
+        // @ts-expect-error: unknown operator
+        Repo.updateAll(User, { push: { tags: "x" } }),
+        /unknown update operators push/,
+      );
+      assert.equal(queries.length, 0);
+      await insertUser();
+      await assert.rejects(
+        Repo.updateAll(User, { set: { age: -1 } }),
+        (error: unknown) =>
+          error instanceof ConstraintError && error.type === "check",
+      );
+    });
+
+    test("deleteAll deletes all rows or the refined ones", async () => {
+      await insertUser({ age: 20 });
+      await insertUser({ email: "bob@example.com", age: 40 });
+      await insertUser({ email: "cid@example.com", age: 50 });
+      assert.deepEqual(
+        await Repo.deleteAll(User, (q) => q.where("age", ">", 45)),
+        { count: 1 },
+      );
+      assert.deepEqual(await Repo.deleteAll(User), { count: 2 });
+    });
+  });
+
   test("load builds records from raw Kysely rows", async () => {
     await insertUser();
     const row = await db

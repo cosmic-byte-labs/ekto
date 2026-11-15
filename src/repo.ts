@@ -19,6 +19,7 @@ import { inspect } from "node:util";
 import {
   type Compilable,
   CompiledQuery,
+  type DeleteQueryBuilder,
   type DeleteResult,
   type InsertResult,
   isCompilable,
@@ -26,6 +27,7 @@ import {
   type Kysely,
   type MergeResult,
   type RawBuilder,
+  type UpdateQueryBuilder,
   type UpdateResult,
 } from "kysely";
 import {
@@ -105,7 +107,74 @@ interface StaleOptions<D> {
   readonly staleErrorMessage?: string;
 }
 
-export type InsertOptions<D> = ReturningOptions<D>;
+/**
+ * What to do when an insert violates a unique constraint (Ecto's
+ * `:on_conflict`): raise (the default), do nothing, or update the existing
+ * row with the inserted values of some or all fields. Replacing all fields
+ * includes the primary key and fields the insert did not set.
+ */
+export type OnConflict<D> =
+  | "raise"
+  | "nothing"
+  | "replaceAll"
+  | { readonly replace: readonly (keyof D & string)[] }
+  | { readonly replaceAllExcept: readonly (keyof D & string)[] };
+
+interface ConflictOptions<D> {
+  readonly onConflict?: OnConflict<D>;
+  /**
+   * The columns of the unique index the conflict is on (Ecto's
+   * `:conflict_target`), or a raw SQL fragment such as
+   * `"(email) WHERE deleted_at IS NULL"`. Required by Postgres to update.
+   */
+  readonly conflictTarget?:
+    | readonly (keyof D & string)[]
+    | { readonly unsafeFragment: string };
+}
+
+/**
+ * With `onConflict: "nothing"`, an insert that conflicted returns the record
+ * without reading anything back (so without a generated id), as Ecto does.
+ */
+export interface InsertOptions<D>
+  extends ReturningOptions<D>,
+    ConflictOptions<D> {}
+
+/** The persisted fields of a schema (its Kysely table's columns). */
+export type PersistedName<S extends AnySchema> = keyof KyselyTable<
+  S,
+  DriverTypes
+> &
+  string;
+
+/** A row for `insertAll`: values of persisted fields; missing ones get their column default. */
+export type InsertAllEntry<S extends AnySchema> = {
+  readonly [K in PersistedName<S>]?: Infer<S>[K];
+};
+
+export interface InsertAllOptions<S extends AnySchema>
+  extends ConflictOptions<Infer<S>> {
+  /** Fields to read back, `true` for all; they are loaded as records. */
+  readonly returning?: boolean | readonly PersistedName<S>[];
+}
+
+/** The result of `insertAll`. */
+export interface InsertAllResult<S extends AnySchema> {
+  /** The rows inserted (or updated, on conflict). */
+  readonly count: number;
+  /** The records read back with `returning`; empty without it. */
+  readonly rows: Infer<S>[];
+}
+
+/** The updates of `updateAll` (Ecto's `update_all` keyword list). */
+export interface UpdateAll<S extends AnySchema> {
+  /** Values to set; cast and dumped through the field types. */
+  readonly set?: { readonly [K in PersistedName<S>]?: Infer<S>[K] };
+  /** Amounts to add to numeric fields. */
+  readonly inc?: { readonly [K in PersistedName<S>]?: number };
+}
+
+type TableOf<DB, S extends AnySchema> = S["source"] & keyof DB & string;
 
 export interface UpdateOptions<D> extends ReturningOptions<D>, StaleOptions<D> {
   /**
@@ -310,6 +379,44 @@ export interface Repo<DB = any> {
    */
   exec<Q extends Query>(query: Q): Promise<ExecResult<ExecRow<RowOf<Q>>>>;
 
+  /**
+   * Inserts many rows in one query (Ecto's `Repo.insert_all/3`). Values are
+   * dumped through the field types but not cast or validated, and nothing
+   * is generated (no timestamps). Constraint violations are thrown as
+   * `ConstraintError`.
+   */
+  insertAll<S extends AnySchema>(
+    schema: S,
+    entries: readonly InsertAllEntry<S>[],
+    options?: InsertAllOptions<S>,
+  ): Promise<InsertAllResult<S>>;
+
+  /**
+   * Updates all rows of a schema's table, or those the Kysely query
+   * `refine` returns selects (Ecto's `Repo.update_all/3`). Values are cast
+   * and dumped through the field types; `updated_at` is not touched.
+   */
+  updateAll<S extends AnySchema>(
+    schema: S,
+    updates: UpdateAll<S>,
+    refine?: (
+      query: UpdateQueryBuilder<
+        DB,
+        TableOf<DB, S>,
+        TableOf<DB, S>,
+        UpdateResult
+      >,
+    ) => Compilable<unknown>,
+  ): Promise<{ readonly count: number }>;
+
+  /** Deletes all rows of a schema's table, or those `refine` selects (Ecto's `Repo.delete_all/2`). */
+  deleteAll<S extends AnySchema>(
+    schema: S,
+    refine?: (
+      query: DeleteQueryBuilder<DB, TableOf<DB, S>, DeleteResult>,
+    ) => Compilable<unknown>,
+  ): Promise<{ readonly count: number }>;
+
   /** Builds a loaded record from a raw database row (Ecto's `Repo.load/2`). */
   load<S extends AnySchema>(
     schema: S,
@@ -436,7 +543,7 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
 
   /** Dumps values for the database, throwing `ChangeError` (Ecto's `dump_fields!`). */
   function dumpFields(
-    action: Action | "query",
+    action: string,
     schema: AnySchema,
     entries: Entries,
   ): [string, unknown][] {
@@ -540,7 +647,7 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
     action: Action,
     query: Queryable,
     returning: readonly string[],
-    options: StaleOptions<object>,
+    options: StaleOptions<object> & { readonly conflictNothing?: boolean },
     source: string,
   ): Promise<ApplyResult> {
     let result: QueryResult;
@@ -560,7 +667,8 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
         : (result.numAffectedRows ?? result.rows.length);
     if (count === 1) return { ok: true, values: result.rows[0] ?? {} };
     if (count > 1) throw new MultiplePrimaryKeyError(action, source, count);
-    if (options.allowStale) return { ok: true, values: {} };
+    if (options.allowStale || options.conflictNothing)
+      return { ok: true, values: {} };
     if (options.staleErrorField !== undefined) {
       return {
         ok: false,
@@ -628,16 +736,75 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
       .reduce((acc, condition) => sql`${acc} AND ${condition}`);
   }
 
+  /** A cell `insertAll` has no value for, filled with the column default. */
+  const DEFAULT = sql`DEFAULT`;
+
   function insertSql(
     source: string,
-    values: Entries,
+    header: readonly string[],
+    rows: readonly (readonly unknown[])[],
+    onConflict: Sql | undefined,
     returning: readonly string[],
   ): Queryable {
-    const query =
-      values.length === 0
+    let query =
+      header.length === 0
         ? sql`INSERT INTO ${ident(source)} DEFAULT VALUES`
-        : sql`INSERT INTO ${ident(source)} (${sql.splice(values.map(([f]) => ident(f)))}) VALUES (${sql.splice(values.map(([, v]) => v))})`;
+        : sql`INSERT INTO ${ident(source)} (${sql.splice(header.map(ident))}) VALUES ${sql.splice(
+            rows.map((row) => sql`(${sql.splice(row)})`),
+          )}`;
+    if (onConflict) query = sql`${query} ${onConflict}`;
     return withReturning(query, returning);
+  }
+
+  /** The `ON CONFLICT` clause (Ecto's `on_conflict/2` in the Postgres connection). */
+  function onConflictSql(
+    schema: AnySchema,
+    options: ConflictOptions<Values>,
+  ): Sql | undefined {
+    const { onConflict = "raise", conflictTarget } = options;
+    if (onConflict === "raise") {
+      if (conflictTarget !== undefined) {
+        throw new TypeError(
+          'conflictTarget is forbidden when onConflict is "raise"',
+        );
+      }
+      return undefined;
+    }
+    let target = sql``;
+    if (conflictTarget !== undefined) {
+      if (Array.isArray(conflictTarget)) {
+        for (const field of conflictTarget) persistedField(schema, field);
+        target = sql` (${sql.splice(conflictTarget.map(ident))})`;
+      } else {
+        const { unsafeFragment } = conflictTarget as { unsafeFragment: string };
+        target = new Sql([{ kind: "text", text: ` ${unsafeFragment}` }]);
+      }
+    }
+    if (onConflict === "nothing") return sql`ON CONFLICT${target} DO NOTHING`;
+
+    let fields: readonly string[];
+    if (onConflict === "replaceAll") fields = schema.persistedFields;
+    else if ("replace" in onConflict) {
+      fields = onConflict.replace;
+      for (const field of fields) persistedField(schema, field);
+    } else {
+      for (const field of onConflict.replaceAllExcept)
+        persistedField(schema, field);
+      fields = schema.persistedFields.filter(
+        (field) => !onConflict.replaceAllExcept.includes(field),
+      );
+    }
+    if (fields.length === 0)
+      throw new TypeError("onConflict needs at least one field to replace");
+    if (conflictTarget === undefined) {
+      throw new TypeError(
+        "the conflictTarget option is required when onConflict replaces fields",
+      );
+    }
+    const set = sql.splice(
+      fields.map((f) => sql`${ident(f)} = EXCLUDED.${ident(f)}`),
+    );
+    return sql`ON CONFLICT${target} DO UPDATE SET ${set}`;
   }
 
   function updateSql(
@@ -689,6 +856,10 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
 
     const schema = schemaOf(changeset.data, "insert");
     const returning = returningFields(schema, options.returning);
+    const onConflict = onConflictSql(
+      schema,
+      options as ConflictOptions<Values>,
+    );
     changeset = putRepoAndAction(changeset, "insert");
     changeset = surfaceChanges(changeset, schema.persistedFields);
 
@@ -707,13 +878,19 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
         ...dumpFields("insert", schema, Object.entries(changes)),
         ...dumpFields("insert", schema, Object.entries(autogen)),
       ];
-      const query = insertSql(schema.source, values, returnFields);
+      const query = insertSql(
+        schema.source,
+        values.map(([field]) => field),
+        [values.map(([, value]) => value)],
+        onConflict,
+        returnFields,
+      );
       const result = await applyWrite(
         prepared,
         "insert",
         query,
         returnFields,
-        {},
+        { conflictNothing: options.onConflict === "nothing" },
         schema.source,
       );
       if (!result.ok) return result;
@@ -847,14 +1024,19 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
   // -------------------------------------------------------------------------
 
   /** Casts and dumps a value compared in a query, as Ecto's planner does. */
-  function queryParam(schema: AnySchema, field: string, value: unknown) {
+  function queryParam(
+    schema: AnySchema,
+    field: string,
+    value: unknown,
+    kind = "where",
+  ) {
     const type = persistedField(schema, field);
     const cast = castValue(type, value);
     if (!cast.ok) {
       throw new CastError(
         type.type,
         value,
-        `value ${inspect(value)} in where cannot be cast to type ${formatType(type.type)} in query`,
+        `value ${inspect(value)} in ${kind} cannot be cast to type ${formatType(type.type)} in query`,
       );
     }
     return cast.value;
@@ -1023,15 +1205,17 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
     };
   }
 
-  async function exec(input: unknown): Promise<ExecResult<object>> {
-    const compiled = compileQuery(input, "exec");
-    let result: QueryResult;
+  /** Runs a write without a changeset; constraint violations are thrown. */
+  async function runWrite(
+    compiled: CompiledQuery,
+    source: string | undefined,
+    action = writeKinds[compiled.query.kind] ?? "write",
+  ): Promise<QueryResult> {
     try {
-      result = await executor.execute(compiled);
+      return await executor.execute(compiled, source);
     } catch (error) {
       const [violation] = adapter.toConstraints(error);
       if (violation === undefined) throw error;
-      const action = writeKinds[compiled.query.kind] ?? "write";
       throw new ConstraintError(
         action,
         violation.type,
@@ -1039,10 +1223,123 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
         undefined,
       );
     }
+  }
+
+  async function exec(input: unknown): Promise<ExecResult<object>> {
+    const result = await runWrite(compileQuery(input, "exec"), undefined);
     return {
       rowCount: result.numAffectedRows ?? result.rows.length,
       rows: [...result.rows],
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Bulk writes (insert_all, update_all, delete_all)
+  // -------------------------------------------------------------------------
+
+  async function insertAll(
+    schema: AnySchema,
+    entries: readonly Values[],
+    options: InsertAllOptions<AnySchema> = {},
+  ): Promise<InsertAllResult<AnySchema>> {
+    const returning =
+      options.returning === true
+        ? [...schema.persistedFields]
+        : Array.isArray(options.returning)
+          ? options.returning
+          : [];
+    for (const field of returning) persistedField(schema, field);
+    const onConflict = onConflictSql(schema, options);
+    if (entries.length === 0) return { count: 0, rows: [] };
+
+    const dumped = entries.map((entry) =>
+      Object.fromEntries(
+        dumpFields(
+          "insertAll",
+          schema,
+          Object.entries(entry).filter(([, value]) => value !== undefined),
+        ),
+      ),
+    );
+    const header = [...new Set(dumped.flatMap((row) => Object.keys(row)))];
+    const rows = dumped.map((row) =>
+      header.map((field) => (Object.hasOwn(row, field) ? row[field] : DEFAULT)),
+    );
+    const query = insertSql(schema.source, header, rows, onConflict, returning);
+    const result = await runWrite(
+      CompiledQuery.raw(query.sql, [...query.params]),
+      schema.source,
+      "insert",
+    );
+    return {
+      count: result.numAffectedRows ?? result.rows.length,
+      rows: result.rows.map((row) => load(schema, row, loader)),
+    };
+  }
+
+  async function updateAll(
+    schema: AnySchema,
+    updates: UpdateAll<AnySchema>,
+    refine: (query: never) => Compilable<unknown> = (q) => q,
+  ): Promise<{ count: number }> {
+    const { set = {}, inc = {}, ...rest } = updates;
+    const unknown = Object.keys(rest);
+    if (unknown.length > 0) {
+      throw new TypeError(
+        `unknown update operators ${unknown.join(", ")} in updateAll; use set or inc`,
+      );
+    }
+    const values = dumpFields(
+      "updateAll",
+      schema,
+      Object.entries(set).map(([field, value]) => [
+        field,
+        queryParam(schema, field, value, "update"),
+      ]),
+    );
+    const increments = dumpFields(
+      "updateAll",
+      schema,
+      Object.entries(inc).map(([field, value]) => {
+        if (typeof value !== "number") {
+          throw new TypeError(
+            `inc of ${field} in updateAll must be a number, got: ${inspect(value)}`,
+          );
+        }
+        return [field, value];
+      }),
+    );
+    if (values.length + increments.length === 0)
+      throw new TypeError("updateAll needs at least one field to update");
+
+    // biome-ignore lint/suspicious/noExplicitAny: built for any table
+    const builder = (executor.db as Kysely<any>)
+      .updateTable(schema.source)
+      // biome-ignore lint/suspicious/noExplicitAny: Kysely's expression builder
+      .set((eb: any) => ({
+        ...Object.fromEntries(values),
+        ...Object.fromEntries(
+          increments.map(([field, n]) => [field, eb(field, "+", n)]),
+        ),
+      }));
+    const result = await runWrite(
+      compileQuery(refine(builder as never), "updateAll"),
+      schema.source,
+    );
+    return { count: result.numAffectedRows ?? result.rows.length };
+  }
+
+  async function deleteAll(
+    schema: AnySchema,
+    refine: (query: never) => Compilable<unknown> = (q) => q,
+  ): Promise<{ count: number }> {
+    // biome-ignore lint/suspicious/noExplicitAny: built for any table
+    const builder = (executor.db as Kysely<any>).deleteFrom(schema.source);
+    const result = await runWrite(
+      compileQuery(refine(builder as never), "deleteAll"),
+      schema.source,
+    );
+    return { count: result.numAffectedRows ?? result.rows.length };
   }
 
   const repo: Repo<DB> = {
@@ -1083,6 +1380,9 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
     }) as Repo["oneOrThrow"],
     query: query as Repo["query"],
     exec: exec as Repo["exec"],
+    insertAll: insertAll as Repo["insertAll"],
+    updateAll: updateAll as Repo["updateAll"],
+    deleteAll: deleteAll as Repo["deleteAll"],
     load: ((schema: AnySchema, row: Values) =>
       load(schema, row, loader)) as Repo["load"],
   };

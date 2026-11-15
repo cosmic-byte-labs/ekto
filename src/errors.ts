@@ -118,8 +118,9 @@ export class ConstraintError extends Error {
     let advice: string;
     if (changeset === undefined) {
       advice =
-        "The write bypassed changesets (Repo.exec). Write through a changeset\n" +
-        `and call \`${fn}\` on it to get a changeset error instead.`;
+        "The write bypassed changesets (insertAll, updateAll, deleteAll or exec).\n" +
+        `Write through a changeset and call \`${fn}\` on it to get a\n` +
+        "changeset error instead.";
     } else {
       const declared =
         changeset.constraints.length === 0
