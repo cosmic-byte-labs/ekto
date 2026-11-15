@@ -1,21 +1,28 @@
 /**
- * The `ekto` command: `ekto migrate`, `ekto rollback`, `ekto status` and
+ * The `ekto` command: `ekto migrate`, `ekto rollback`, `ekto status`,
  * `ekto gen.migration <name>` (Ecto's `mix ecto.migrate`, `ecto.rollback`,
- * `ecto.migrations` and `ecto.gen.migration`).
+ * `ecto.migrations` and `ecto.gen.migration`) and `ekto gen.schema`
+ * (Phoenix's `mix phx.gen.schema`).
  *
  * The configuration file (`ekto.config.ts` or `ekto.config.js`, or
- * `--config`) default-exports `{ db, adapter, migrationsFolder? }`, or a
- * function returning it.
+ * `--config`) default-exports an `EktoConfig`, or a function returning it.
  */
 
 import { existsSync } from "node:fs";
-import { mkdir, readdir, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { Kysely } from "kysely";
 import type { Adapter } from "../adapter.ts";
+import {
+  generate,
+  generateSchema,
+  type MigrationFormat,
+  parseAttrs,
+} from "./gen.ts";
 import { createMigrator, fileMigrations } from "./runner.ts";
+
+export { generate };
 
 export interface EktoConfig {
   // biome-ignore lint/suspicious/noExplicitAny: any database
@@ -27,6 +34,10 @@ export interface EktoConfig {
   readonly migrationSource?: string;
   /** Whether to lock while migrating, `true` by default. */
   readonly migrationLock?: boolean;
+  /** Where `gen.schema` writes schemas, `src/schemas` by default. */
+  readonly schemasFolder?: string;
+  /** The migrations `gen.schema` writes: `ekto` (the default), `kysely` or `none`. */
+  readonly migrationFormat?: MigrationFormat;
 }
 
 const USAGE = `usage: ekto <command> [options]
@@ -36,6 +47,9 @@ commands:
   rollback              roll back migrations, the last one by default
   status                list migrations and whether they ran
   gen.migration <name>  create a migration file
+  gen.schema <Name> <table> [field:type[:unique]...]
+                        create a schema and its migration, e.g.
+                        gen.schema Post posts title body:text user_id:references:users
 
 options:
   --all                 run (or roll back) every migration
@@ -45,48 +59,11 @@ options:
   --no-lock             do not lock the migrations table
   --config FILE         configuration file (default: ekto.config.ts or .js)
   --migrations DIR      migrations folder (overrides the configuration)
+  --schemas DIR         schemas folder, for gen.schema (overrides the configuration)
+  --migration FORMAT    gen.schema's migration: ekto, kysely or none
+  --no-migration        as --migration none
+  --binary-id           gen.schema: UUID primary key and references
 `;
-
-/** `20260115103000`, the UTC time (Ecto's `timestamp/0`). */
-function timestamp(date: Date): string {
-  return date.toISOString().replace(/\D/g, "").slice(0, 14);
-}
-
-/** `AddUsers` and `add users` become `add_users` (Macro.underscore). */
-function underscore(name: string): string {
-  return name
-    .replace(/([a-z\d])([A-Z])/g, "$1_$2")
-    .replace(/[^A-Za-z\d]+/g, "_")
-    .replace(/^_|_$/g, "")
-    .toLowerCase();
-}
-
-const TEMPLATE = `import { migration } from "ekto/migrate";
-
-export default migration({
-  change(m) {},
-});
-`;
-
-/** Creates `<folder>/<timestamp>_<name>.ts` and returns its path. */
-export async function generate(
-  folder: string,
-  name: string,
-  now = new Date(),
-): Promise<string> {
-  const base = underscore(name);
-  if (base === "")
-    throw new Error(`expected a migration name, got ${JSON.stringify(name)}`);
-  await mkdir(folder, { recursive: true });
-  const existing = (await readdir(folder)).find(
-    (f) => f.replace(/^\d+_/, "").replace(/\.[^.]+$/, "") === base,
-  );
-  if (existing)
-    throw new Error(`migration name ${base} is already used by ${existing}`);
-  const file = join(folder, `${timestamp(now)}_${base}.ts`);
-  await writeFile(file, TEMPLATE, { flag: "wx" });
-  return file;
-}
 
 async function loadConfig(path: string | undefined): Promise<EktoConfig> {
   const candidates = path
@@ -133,6 +110,10 @@ export async function main(
       "to-exclusive": { type: "string" },
       all: { type: "boolean" },
       "no-lock": { type: "boolean" },
+      schemas: { type: "string" },
+      migration: { type: "string" },
+      "no-migration": { type: "boolean" },
+      "binary-id": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -156,18 +137,49 @@ export async function main(
     }),
   };
 
-  if (command === "gen.migration") {
-    if (rest.length !== 1) throw new Error("usage: ekto gen.migration <name>");
-    let folder = values.migrations;
-    if (folder === undefined) {
-      // The configuration is optional here: generating needs no database.
-      try {
-        folder = (await loadConfig(values.config)).migrationsFolder;
-      } catch {}
+  if (command === "gen.migration" || command === "gen.schema") {
+    // The configuration is optional: generating needs no database.
+    let config: EktoConfig | undefined;
+    try {
+      config = await loadConfig(values.config);
+    } catch (error) {
+      if (values.config !== undefined) throw error;
     }
-    const file = await generate(folder ?? "migrations", rest[0] as string);
-    out(`created ${file}`);
-    return 0;
+    try {
+      const migrationsFolder =
+        values.migrations ?? config?.migrationsFolder ?? "migrations";
+      let files: string[];
+      if (command === "gen.migration") {
+        if (rest.length !== 1)
+          throw new Error("usage: ekto gen.migration <name>");
+        files = [await generate(migrationsFolder, rest[0] as string)];
+      } else {
+        const [name, table, ...attrs] = rest;
+        if (name === undefined || table === undefined)
+          throw new Error(
+            "usage: ekto gen.schema <Name> <table> [field:type[:unique]...]",
+          );
+        const binaryId = values["binary-id"] === true;
+        files = await generateSchema(
+          { name, table, attrs: parseAttrs(attrs, { binaryId }), binaryId },
+          {
+            schemasFolder:
+              values.schemas ?? config?.schemasFolder ?? "src/schemas",
+            migrationsFolder,
+            migration: values["no-migration"]
+              ? "none"
+              : ((values.migration as MigrationFormat | undefined) ??
+                config?.migrationFormat ??
+                "ekto"),
+            ...(config && { adapter: config.adapter }),
+          },
+        );
+      }
+      for (const file of files) out(`* creating ${file}`);
+      return 0;
+    } finally {
+      await config?.db.destroy();
+    }
   }
 
   if (!["migrate", "rollback", "status"].includes(command)) {

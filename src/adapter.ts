@@ -15,7 +15,12 @@ import {
   type Kysely,
 } from "kysely";
 import type { ConstraintType } from "./changeset.ts";
-import type { DdlCommand } from "./migrate/dsl.ts";
+import type {
+  ColumnOptions,
+  ColumnType,
+  DdlCommand,
+  Reference,
+} from "./migrate/dsl.ts";
 import type { Queryable, SqlSyntax } from "./sql.ts";
 import type { PrimitiveType } from "./type.ts";
 
@@ -44,6 +49,12 @@ export interface Adapter {
    * Adapters without it cannot run migrations.
    */
   ddl?(command: DdlCommand): readonly string[];
+  /**
+   * The database type of a migration column type or reference (Ecto's
+   * `column_type/2`), e.g. `varchar(255)` for `string` on PostgreSQL. Used
+   * to generate migrations for other tools.
+   */
+  columnType?(type: ColumnType | Reference, options?: ColumnOptions): string;
   /**
    * Runs `fn` holding the lock that keeps two migrators from running the
    * same migration (Ecto's `lock_for_migrations/3`); `table` is the

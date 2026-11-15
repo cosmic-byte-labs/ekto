@@ -9,7 +9,7 @@ import type { DriverValue, KyselyTables } from "../kysely.ts";
 import type { AnySchema } from "../schema.ts";
 import { quoteIdentifierAnsi, type SqlSyntax } from "../sql.ts";
 import type { PrimitiveType } from "../type.ts";
-import { postgresDdl } from "./ddl.ts";
+import { postgresColumnType, postgresDdl } from "./ddl.ts";
 
 /** How PostgreSQL writes `sql` values: `$1`, `$2`… and double-quoted identifiers. */
 export const postgresSyntax: SqlSyntax = Object.freeze({
@@ -198,6 +198,7 @@ export function postgres(): Adapter {
     dump: dumpValue,
     toConstraints,
     ddl: postgresDdl,
+    columnType: postgresColumnType,
     lockForMigrations,
   });
 }

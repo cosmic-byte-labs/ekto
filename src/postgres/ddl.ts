@@ -58,6 +58,16 @@ function columnTypeName(type: ColumnType, options: ColumnOptions): string {
   return name;
 }
 
+/** The PostgreSQL type of a column type or reference (Ecto's `column_type/2`). */
+export function postgresColumnType(
+  type: ColumnType | Reference,
+  options: ColumnOptions = {},
+): string {
+  return isReference(type)
+    ? referenceColumnType(type.type, options)
+    : columnTypeName(type, options);
+}
+
 function referenceColumnType(type: ColumnType, options: ColumnOptions) {
   if (type === "serial") return "integer";
   if (type === "bigserial") return "bigint";

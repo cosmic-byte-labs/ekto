@@ -53,6 +53,14 @@ function columnType(type: ColumnType, options: ColumnOptions): string {
   return SQLITE_TYPES[type] ?? type.toUpperCase();
 }
 
+/** The SQLite type of a column type or reference (ecto_sqlite3's `column_type/2`). */
+export function sqliteColumnType(
+  type: ColumnType | Reference,
+  options: ColumnOptions = {},
+): string {
+  return columnType(isReference(type) ? type.type : type, options);
+}
+
 function defaultExpr(options: ColumnOptions): string {
   if (!("default" in options)) return "";
   const value = options.default as DefaultValue;
