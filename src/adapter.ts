@@ -9,7 +9,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { CompiledQuery, type Kysely } from "kysely";
+import { CompiledQuery, isCompiledQuery, type Kysely } from "kysely";
 import type { ConstraintType } from "./changeset.ts";
 import type { Queryable, SqlSyntax } from "./sql.ts";
 import type { PrimitiveType } from "./type.ts";
@@ -91,16 +91,22 @@ export class Executor<DB = unknown> {
     return this.db.isTransaction;
   }
 
+  /**
+   * Runs a query on the current connection. A Kysely `CompiledQuery` is run
+   * as is, so plugins see the query they compiled.
+   */
   async execute(
-    query: Queryable,
+    query: Queryable | CompiledQuery,
     source: string | undefined = undefined,
   ): Promise<QueryResult> {
+    const compiled = isCompiledQuery(query)
+      ? query
+      : CompiledQuery.raw(query.sql, [...(query as Queryable).params]);
     const start = performance.now();
     let error: unknown;
     try {
-      const result = await this.db.executeQuery<Record<string, unknown>>(
-        CompiledQuery.raw(query.sql, [...query.params]),
-      );
+      const result =
+        await this.db.executeQuery<Record<string, unknown>>(compiled);
       return {
         rows: result.rows,
         numAffectedRows:
@@ -113,8 +119,8 @@ export class Executor<DB = unknown> {
       throw e;
     } finally {
       this.#onQuery?.({
-        sql: query.sql,
-        params: query.params,
+        sql: compiled.sql,
+        params: compiled.parameters,
         source,
         durationMs: performance.now() - start,
         error,

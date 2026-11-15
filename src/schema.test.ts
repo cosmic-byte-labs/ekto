@@ -4,6 +4,7 @@ import { inspect } from "node:util";
 import {
   getMeta,
   type Infer,
+  isSchema,
   load,
   type New,
   putMeta,
@@ -70,6 +71,13 @@ describe("schema types", () => {
 });
 
 describe("schema reflection", () => {
+  test("isSchema recognises schemas only", () => {
+    assert.ok(isSchema(User));
+    assert.ok(!isSchema({ ...User }));
+    assert.ok(!isSchema(User.new()));
+    assert.ok(!isSchema(null));
+  });
+
   test("splits persisted and virtual fields", () => {
     assert.equal(User.source, "users");
     assert.deepEqual(User.persistedFields, [

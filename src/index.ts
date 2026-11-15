@@ -15,6 +15,7 @@ export {
   NoPrimaryKeyFieldError,
   NoPrimaryKeyValueError,
   NoResultsError,
+  SchemaMismatchError,
   StaleEntryError,
 } from "./errors.ts";
 export type {
@@ -28,9 +29,14 @@ export type {
 export {
   createRepo,
   type DeleteOptions,
+  type ExecResult,
   type InsertOptions,
+  type Query,
+  type QueryRows,
   type Repo,
   type RepoConfig,
+  type RowOf,
+  type SchemaQuery,
   type UpdateOptions,
   type WriteResult,
 } from "./repo.ts";
@@ -45,6 +51,7 @@ export {
   type Fields,
   getMeta,
   type Infer,
+  isSchema,
   type Loader,
   load,
   type Meta,

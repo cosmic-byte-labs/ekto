@@ -101,40 +101,69 @@ export class MultiplePrimaryKeyError extends Error {
 /**
  * The database reported a constraint violation the changeset did not
  * declare (Ecto.ConstraintError). Declare it, e.g. with `uniqueConstraint`,
- * to get a changeset error instead.
+ * to get a changeset error instead. Writes through `Repo.exec` have no
+ * changeset, so their violations are always thrown.
  */
 export class ConstraintError extends Error {
   readonly type: ConstraintType;
   readonly constraint: string;
 
   constructor(
-    action: Action,
+    action: string,
     type: ConstraintType,
     constraint: string,
-    changeset: AnyChangeset,
+    changeset: AnyChangeset | undefined,
   ) {
     const fn = constraintFunction(type);
-    const declared =
-      changeset.constraints.length === 0
-        ? "The changeset has not defined any constraint."
-        : `The changeset defined the following constraints:\n\n${changeset.constraints
-            .map(
-              (c) =>
-                `    * ${inspect(c.constraint)} (${constraintFunction(c.type)})`,
-            )
-            .join("\n")}`;
-    super(
-      `constraint error when attempting to ${action} record:\n\n` +
-        `    * ${inspect(constraint)} (${fn})\n\n` +
+    let advice: string;
+    if (changeset === undefined) {
+      advice =
+        "The write bypassed changesets (Repo.exec). Write through a changeset\n" +
+        `and call \`${fn}\` on it to get a changeset error instead.`;
+    } else {
+      const declared =
+        changeset.constraints.length === 0
+          ? "The changeset has not defined any constraint."
+          : `The changeset defined the following constraints:\n\n${changeset.constraints
+              .map(
+                (c) =>
+                  `    * ${inspect(c.constraint)} (${constraintFunction(c.type)})`,
+              )
+              .join("\n")}`;
+      advice =
         "If you would like to stop this constraint violation from raising an\n" +
         "exception and instead add it as an error to your changeset, please\n" +
         `call \`${fn}\` on your changeset with the constraint name as the\n` +
         "`name` option.\n\n" +
-        declared,
+        declared;
+    }
+    super(
+      `constraint error when attempting to ${action} record:\n\n` +
+        `    * ${inspect(constraint)} (${fn})\n\n` +
+        advice,
     );
     this.name = "ConstraintError";
     this.type = type;
     this.constraint = constraint;
+  }
+}
+
+/**
+ * Rows a query returned for a schema lack some of its persisted columns, so
+ * they cannot be loaded as records of it (`Repo.all(Schema, query)`).
+ */
+export class SchemaMismatchError extends Error {
+  readonly source: string;
+  readonly missing: readonly string[];
+
+  constructor(source: string, missing: readonly string[], hint = "") {
+    super(
+      `the query for schema ${source} did not return the columns ${missing.join(", ")}; ` +
+        `select all of the schema's columns (e.g. \`selectAll("${source}")\`)${hint}`,
+    );
+    this.name = "SchemaMismatchError";
+    this.source = source;
+    this.missing = missing;
   }
 }
 

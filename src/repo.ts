@@ -16,7 +16,18 @@
  */
 
 import { inspect } from "node:util";
-import type { Kysely } from "kysely";
+import {
+  type Compilable,
+  CompiledQuery,
+  type DeleteResult,
+  type InsertResult,
+  isCompilable,
+  isCompiledQuery,
+  type Kysely,
+  type MergeResult,
+  type RawBuilder,
+  type UpdateResult,
+} from "kysely";
 import {
   type Adapter,
   type ConstraintViolation,
@@ -43,19 +54,22 @@ import {
   NoPrimaryKeyFieldError,
   NoPrimaryKeyValueError,
   NoResultsError,
+  SchemaMismatchError,
   StaleEntryError,
 } from "./errors.ts";
+import type { DriverTypes, KyselyTable } from "./kysely.ts";
 import {
   type AnyField,
   type AnySchema,
   getMeta,
   type Infer,
+  isSchema,
   type Loader,
   load,
   putMeta,
   type RecordState,
 } from "./schema.ts";
-import { type Queryable, type Sql, sql } from "./sql.ts";
+import { isQueryable, type Queryable, Sql, sql } from "./sql.ts";
 import {
   CastError,
   castValue,
@@ -103,6 +117,77 @@ export interface UpdateOptions<D> extends ReturningOptions<D>, StaleOptions<D> {
 export interface DeleteOptions<D>
   extends ReturningOptions<D>,
     StaleOptions<D> {}
+
+/**
+ * A query the Repo runs: a `Queryable` (`{ sql, params }`), ekto's `sql`
+ * tag, or a Kysely query (a builder, its `CompiledQuery`, or Kysely's own
+ * `sql` tag).
+ */
+export type Query<Row = unknown> =
+  | Queryable<Row>
+  | Sql<Row>
+  | Compilable<Row>
+  | CompiledQuery<Row>
+  | RawBuilder<Row>;
+
+/** The row type of a query; untyped queries give `Record<string, unknown>`. */
+export type RowOf<Q> = RowType<
+  Q extends Sql<infer R>
+    ? R
+    : Q extends RawBuilder<infer R>
+      ? R
+      : Q extends Compilable<infer R>
+        ? R
+        : Q extends CompiledQuery<infer R>
+          ? R
+          : Q extends Queryable<infer R>
+            ? R
+            : unknown
+>;
+type RowType<R> = unknown extends R ? Record<string, unknown> : R;
+
+/**
+ * Type check for `Repo.all(Schema, query)`: a typed query must select every
+ * persisted column of the schema. Untyped queries are checked at runtime.
+ */
+export type SchemaQuery<S extends AnySchema, Q> =
+  RowOf<Q> extends Record<string, unknown>
+    ? Record<string, unknown> extends RowOf<Q>
+      ? Q
+      : MissingColumns<S, Q>
+    : MissingColumns<S, Q>;
+type MissingColumns<S extends AnySchema, Q> = [
+  Exclude<keyof KyselyTable<S, DriverTypes>, keyof RowOf<Q>>,
+] extends [never]
+  ? Q
+  : Q & {
+      readonly "query does not select the columns": Exclude<
+        keyof KyselyTable<S, DriverTypes>,
+        keyof RowOf<Q>
+      >;
+    };
+
+/** Kysely's results of writes without `returning`, which return no rows. */
+type ExecRow<R> = [R] extends [
+  InsertResult | UpdateResult | DeleteResult | MergeResult,
+]
+  ? never
+  : R;
+
+/** The result of `Repo.query`. */
+export interface QueryRows<R> {
+  readonly rows: R[];
+  /** The rows returned, or affected by a write. */
+  readonly rowCount: number;
+}
+
+/** The result of `Repo.exec`. */
+export interface ExecResult<R> {
+  /** The rows the write affected. */
+  readonly rowCount: number;
+  /** The rows it returned (with `returning`). */
+  readonly rows: R[];
+}
 
 export interface RepoConfig<DB> {
   /** The application's Kysely instance; ekto runs its queries through it. */
@@ -178,6 +263,52 @@ export interface Repo<DB = any> {
     schema: S,
     clauses: Readonly<Partial<Infer<S>>>,
   ): Promise<Infer<S>>;
+
+  /**
+   * Fetches all records of a schema (Ecto's `Repo.all/2`). With a query,
+   * its rows are loaded through the schema; they must contain every
+   * persisted column (else `SchemaMismatchError`), and other columns are
+   * dropped. Without a schema, the rows are returned as the driver gives
+   * them. Writes are rejected; use `exec`.
+   */
+  all<S extends AnySchema>(schema: S): Promise<Infer<S>[]>;
+  all<S extends AnySchema, Q extends Query>(
+    schema: S,
+    query: SchemaQuery<S, Q>,
+  ): Promise<Infer<S>[]>;
+  all<Q extends Query>(query: Q): Promise<RowOf<Q>[]>;
+
+  /**
+   * Like `all`, but returns one record (or row) or `null`, and throws
+   * `MultipleResultsError` when the query returns more (Ecto's `Repo.one/2`).
+   */
+  one<S extends AnySchema>(schema: S): Promise<Infer<S> | null>;
+  one<S extends AnySchema, Q extends Query>(
+    schema: S,
+    query: SchemaQuery<S, Q>,
+  ): Promise<Infer<S> | null>;
+  one<Q extends Query>(query: Q): Promise<RowOf<Q> | null>;
+  /** Like `one`, but throws `NoResultsError` instead of returning `null`. */
+  oneOrThrow<S extends AnySchema>(schema: S): Promise<Infer<S>>;
+  oneOrThrow<S extends AnySchema, Q extends Query>(
+    schema: S,
+    query: SchemaQuery<S, Q>,
+  ): Promise<Infer<S>>;
+  oneOrThrow<Q extends Query>(query: Q): Promise<RowOf<Q>>;
+
+  /**
+   * Runs a query and returns its rows as the driver gives them (Ecto's
+   * `Repo.query/3`). Kysely writes are rejected; use `exec`.
+   */
+  query<Q extends Query>(query: Q): Promise<QueryRows<RowOf<Q>>>;
+
+  /**
+   * Runs a write such as a Kysely `deleteFrom` and returns the number of
+   * affected rows. Such writes bypass changesets: nothing is cast,
+   * validated or generated, and constraint violations are thrown as
+   * `ConstraintError`.
+   */
+  exec<Q extends Query>(query: Q): Promise<ExecResult<ExecRow<RowOf<Q>>>>;
 
   /** Builds a loaded record from a raw database row (Ecto's `Repo.load/2`). */
   load<S extends AnySchema>(
@@ -777,6 +908,143 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
     return record;
   }
 
+  // -------------------------------------------------------------------------
+  // Queries
+  // -------------------------------------------------------------------------
+
+  const writeKinds: Readonly<Record<string, string>> = {
+    InsertQueryNode: "insert",
+    UpdateQueryNode: "update",
+    DeleteQueryNode: "delete",
+    MergeQueryNode: "merge",
+  };
+
+  function compileQuery(query: unknown, fn: string): CompiledQuery {
+    if (query instanceof Sql) {
+      const { sql: text, params } = query.compile(adapter.syntax);
+      return CompiledQuery.raw(text, [...params]);
+    }
+    if (isCompiledQuery(query)) return query;
+    if (isRawBuilder(query)) return query.compile(executor.db);
+    if (isCompilable(query)) return query.compile();
+    if (isQueryable(query))
+      return CompiledQuery.raw(query.sql, [...query.params]);
+    throw new TypeError(
+      `Repo.${fn} expects a query ({ sql, params }, sql\`…\` or a Kysely query), got: ${inspect(query)}`,
+    );
+  }
+
+  /** Compiles a query that must not write (Repo.all/one/query). */
+  function compileRead(query: unknown, fn: string): CompiledQuery {
+    const compiled = compileQuery(query, fn);
+    const write = writeKinds[compiled.query.kind];
+    if (write !== undefined) {
+      throw new TypeError(
+        `Repo.${fn} was given a Kysely ${write} query; run writes with Repo.exec`,
+      );
+    }
+    return compiled;
+  }
+
+  async function allRows(
+    fn: string,
+    first: unknown,
+    second: unknown,
+    hasQuery: boolean,
+  ): Promise<{ rows: readonly object[]; sql: string }> {
+    if (!isSchema(first)) {
+      if (hasQuery) {
+        throw new TypeError(
+          `Repo.${fn} expects a schema as its first argument when given a query, got: ${inspect(first)}`,
+        );
+      }
+      const compiled = compileRead(first, fn);
+      const { rows } = await executor.execute(compiled);
+      return { rows, sql: compiled.sql };
+    }
+    const compiled = hasQuery
+      ? compileRead(second, fn)
+      : compileQuery(selectSql(first, []), fn);
+    const { rows } = await executor.execute(compiled, first.source);
+    return {
+      rows: rows.map((row) => loadRow(first, row)),
+      sql: compiled.sql,
+    };
+  }
+
+  /** Loads a row of a schema query, checking that no column is missing. */
+  function loadRow(schema: AnySchema, row: Values): object {
+    const missing = schema.persistedFields.filter(
+      (field) => !Object.hasOwn(row, field),
+    );
+    if (missing.length > 0) {
+      const camel = missing.some((field) =>
+        Object.hasOwn(
+          row,
+          field.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase()),
+        ),
+      );
+      throw new SchemaMismatchError(
+        schema.source,
+        missing,
+        camel
+          ? "; the row has camelCase keys, and Kysely's CamelCasePlugin is not supported"
+          : "",
+      );
+    }
+    return load(schema, row, loader);
+  }
+
+  async function all(
+    ...args: [unknown] | [unknown, unknown]
+  ): Promise<readonly object[]> {
+    return (await allRows("all", args[0], args[1], args.length > 1)).rows;
+  }
+
+  async function oneRow(
+    fn: string,
+    args: [unknown] | [unknown, unknown],
+  ): Promise<{ row: object | null; sql: string }> {
+    const { rows, sql: text } = await allRows(
+      fn,
+      args[0],
+      args[1],
+      args.length > 1,
+    );
+    if (rows.length > 1) throw new MultipleResultsError(text, rows.length);
+    return { row: rows[0] ?? null, sql: text };
+  }
+
+  async function query(input: unknown): Promise<QueryRows<object>> {
+    const result = await executor.execute(compileRead(input, "query"));
+    return {
+      rows: [...result.rows],
+      rowCount: result.numAffectedRows ?? result.rows.length,
+    };
+  }
+
+  async function exec(input: unknown): Promise<ExecResult<object>> {
+    const compiled = compileQuery(input, "exec");
+    let result: QueryResult;
+    try {
+      result = await executor.execute(compiled);
+    } catch (error) {
+      const [violation] = adapter.toConstraints(error);
+      if (violation === undefined) throw error;
+      const action = writeKinds[compiled.query.kind] ?? "write";
+      throw new ConstraintError(
+        action,
+        violation.type,
+        violation.constraint,
+        undefined,
+      );
+    }
+    return {
+      rowCount: result.numAffectedRows ?? result.rows.length,
+      rows: [...result.rows],
+    };
+  }
+
   const repo: Repo<DB> = {
     adapter,
     get kysely() {
@@ -805,10 +1073,29 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
       one(schema, getByQuery(schema, clauses))) as Repo["getBy"],
     getByOrThrow: (async (schema: AnySchema, clauses: Values) =>
       oneOrThrow(schema, getByQuery(schema, clauses))) as Repo["getByOrThrow"],
+    all: all as Repo["all"],
+    one: (async (...args: [unknown] | [unknown, unknown]) =>
+      (await oneRow("one", args)).row) as Repo["one"],
+    oneOrThrow: (async (...args: [unknown] | [unknown, unknown]) => {
+      const { row, sql: text } = await oneRow("oneOrThrow", args);
+      if (row === null) throw new NoResultsError(text);
+      return row;
+    }) as Repo["oneOrThrow"],
+    query: query as Repo["query"],
+    exec: exec as Repo["exec"],
     load: ((schema: AnySchema, row: Values) =>
       load(schema, row, loader)) as Repo["load"],
   };
   return Object.freeze(repo);
+}
+
+/** Kysely's own `sql` tag, which compiles with a Kysely instance. */
+function isRawBuilder(value: unknown): value is RawBuilder<unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { isRawBuilder?: unknown }).isRawBuilder === true
+  );
 }
 
 function constraintMatches(declared: Constraint, name: string): boolean {

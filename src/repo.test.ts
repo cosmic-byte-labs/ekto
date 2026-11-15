@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, test } from "node:test";
-import { CompiledQuery, type Kysely } from "kysely";
+import { CompiledQuery, type Kysely, sql as ksql } from "kysely";
 import type { QueryEvent } from "./adapter.ts";
 import {
   addError,
@@ -24,12 +24,14 @@ import {
   MultipleResultsError,
   NoPrimaryKeyValueError,
   NoResultsError,
+  SchemaMismatchError,
   StaleEntryError,
 } from "./errors.ts";
 import { type KyselyDB, postgres } from "./postgres/index.ts";
 import { connectPg, skipWithoutPg } from "./postgres.test-helper.ts";
 import { createRepo, type Repo } from "./repo.ts";
 import { getMeta, type Infer, schema, t } from "./schema.ts";
+import { sql } from "./sql.ts";
 import { CastError, string } from "./type.ts";
 import type { Equal, Expect } from "./type-test.test-helper.ts";
 
@@ -527,6 +529,221 @@ describe("Repo on Postgres", { skip: skipWithoutPg }, () => {
       const user = await Repo.get(User, 1);
       type _get = Expect<Equal<typeof user, Infer<typeof User> | null>>;
       assert.equal(user, null);
+    });
+  });
+
+  describe("all, one, query and exec", () => {
+    test("all and one load whole schemas", async () => {
+      await insertUser({ name: "Ann" });
+      await insertUser({ email: "bob@example.com", name: "Bob" });
+      const users = await Repo.all(User);
+      type _all = Expect<Equal<typeof users, Infer<typeof User>[]>>;
+      assert.deepEqual(
+        users.map((u) => [u.id, u.name]),
+        [
+          [1, "Ann"],
+          [2, "Bob"],
+        ],
+      );
+      assert.equal(getMeta(users[0] ?? {})?.state, "loaded");
+      await assert.rejects(Repo.one(User), MultipleResultsError);
+    });
+
+    test("all loads the rows of a Kysely query through the schema", async () => {
+      await insertUser({ age: 20 });
+      await insertUser({ email: "bob@example.com", age: 40 });
+      const adults = Repo.kysely
+        .selectFrom("repo_users")
+        .selectAll("repo_users")
+        .where("age", ">", 30);
+      const users = await Repo.all(User, adults);
+      assert.deepEqual(
+        users.map((u) => u.email),
+        ["bob@example.com"],
+      );
+      assert.equal(users[0]?.id, 2, "int8 ids are loaded as numbers");
+      assert.ok(users[0]?.inserted_at instanceof Date);
+
+      const one = await Repo.one(User, adults.limit(1));
+      type _one = Expect<Equal<typeof one, Infer<typeof User> | null>>;
+      assert.equal(one?.email, "bob@example.com");
+      assert.equal(await Repo.one(User, adults.where("age", ">", 99)), null);
+      await assert.rejects(
+        Repo.oneOrThrow(User, adults.where("age", ">", 99)),
+        NoResultsError,
+      );
+    });
+
+    test("schema queries must return every persisted column", async () => {
+      await insertUser();
+      const partial = Repo.kysely.selectFrom("repo_users").select(["id"]);
+      await assert.rejects(
+        // @ts-expect-error: the query does not select the schema's columns
+        Repo.all(User, partial),
+        (error: unknown) =>
+          error instanceof SchemaMismatchError &&
+          error.missing.includes("email") &&
+          !error.missing.includes("password"),
+      );
+      await assert.rejects(
+        Repo.all(User, sql`SELECT id, email AS "eMail" FROM repo_users`),
+        SchemaMismatchError,
+      );
+      await assert.rejects(
+        Repo.all(
+          User,
+          sql`SELECT id, inserted_at AS "insertedAt" FROM repo_users`,
+        ),
+        /CamelCasePlugin is not supported/,
+      );
+      const extra = await Repo.all(
+        User,
+        sql`SELECT *, 1 AS extra FROM repo_users`,
+      );
+      assert.ok(
+        !Object.hasOwn(extra[0] ?? {}, "extra"),
+        "extra columns are dropped",
+      );
+    });
+
+    test("ekto sql, Kysely sql, Queryables and CompiledQueries all run", async () => {
+      await insertUser();
+      const email = "ann@example.com";
+      const queries = [
+        sql`SELECT * FROM repo_users WHERE email = ${email}`,
+        ksql`SELECT * FROM repo_users WHERE email = ${email}`,
+        { sql: "SELECT * FROM repo_users WHERE email = $1", params: [email] },
+        Repo.kysely
+          .selectFrom("repo_users")
+          .selectAll()
+          .where("email", "=", email)
+          .compile(),
+      ];
+      for (const query of queries) {
+        const [user] = await Repo.all(User, query);
+        assert.equal(user?.email, email);
+      }
+    });
+
+    test("without a schema, rows are returned as the driver gives them", async () => {
+      await insertUser({ name: "Ann" });
+      await Repo.insertOrThrow(Post.new({ title: "Hi", user_id: 1 }));
+      const rows = await Repo.all(
+        Repo.kysely
+          .selectFrom("repo_posts")
+          .innerJoin("repo_users", "repo_users.id", "repo_posts.user_id")
+          .select(["repo_posts.title", "repo_users.name as author"]),
+      );
+      type _rows = Expect<
+        Equal<typeof rows, { title: string; author: string | null }[]>
+      >;
+      assert.deepEqual(rows, [{ title: "Hi", author: "Ann" }]);
+
+      const count = await Repo.one(
+        sql<{ n: string }>`SELECT count(*) AS n FROM repo_users`,
+      );
+      type _count = Expect<Equal<typeof count, { n: string } | null>>;
+      assert.deepEqual(count, { n: "1" }, "no loading: count is int8 text");
+
+      const untyped = await Repo.oneOrThrow(sql`SELECT 1 AS one`);
+      type _untyped = Expect<Equal<typeof untyped, Record<string, unknown>>>;
+      assert.deepEqual(untyped, { one: 1 });
+    });
+
+    test("query returns rows and a row count", async () => {
+      await insertUser();
+      await insertUser({ email: "bob@example.com" });
+      const result = await Repo.query(
+        sql<{ email: string }>`SELECT email FROM repo_users ORDER BY id`,
+      );
+      type _rows = Expect<Equal<typeof result.rows, { email: string }[]>>;
+      assert.deepEqual(result, {
+        rows: [{ email: "ann@example.com" }, { email: "bob@example.com" }],
+        rowCount: 2,
+      });
+    });
+
+    test("all, one and query reject Kysely writes", async () => {
+      const write = Repo.kysely.deleteFrom("repo_users");
+      await assert.rejects(
+        Repo.all(write),
+        /Kysely delete query; run writes with Repo.exec/,
+      );
+      await assert.rejects(Repo.query(write.compile()), /Repo.exec/);
+      // @ts-expect-error: a delete selects no columns
+      await assert.rejects(Repo.one(User, write), /Repo.exec/);
+      await assert.rejects(
+        // @ts-expect-error: not a query
+        Repo.all({ text: "SELECT 1" }),
+        /Repo.all expects a query/,
+      );
+      assert.equal(queries.length, 0);
+    });
+
+    test("exec runs writes and returns the affected rows", async () => {
+      await insertUser({ age: 20 });
+      await insertUser({ email: "bob@example.com", age: 40 });
+      const updated = await Repo.exec(
+        Repo.kysely
+          .updateTable("repo_users")
+          .set({ name: "adult" })
+          .where("age", ">=", 18)
+          .returning(["id", "name"]),
+      );
+      type _updated = Expect<
+        Equal<typeof updated.rows, { id: string; name: string | null }[]>
+      >;
+      assert.equal(updated.rowCount, 2);
+      assert.deepEqual(
+        updated.rows.map((r) => r.name),
+        ["adult", "adult"],
+      );
+
+      const deleted = await Repo.exec(
+        Repo.kysely.deleteFrom("repo_users").where("age", "<", 30),
+      );
+      type _deleted = Expect<Equal<typeof deleted.rows, never[]>>;
+      assert.deepEqual(deleted, { rowCount: 1, rows: [] });
+
+      const none = await Repo.exec(
+        sql`DELETE FROM repo_users WHERE id = ${99}`,
+      );
+      assert.equal(none.rowCount, 0);
+    });
+
+    test("exec throws constraint violations as ConstraintError", async () => {
+      await insertUser();
+      await assert.rejects(
+        Repo.exec(Repo.kysely.updateTable("repo_users").set({ age: -1 })),
+        (error: unknown) =>
+          error instanceof ConstraintError &&
+          error.type === "check" &&
+          error.constraint === "age_must_be_positive" &&
+          /attempting to update record/.test(error.message) &&
+          /bypassed changesets/.test(error.message),
+      );
+      await assert.rejects(
+        Repo.exec(sql`SELECT * FROM missing_table`),
+        (error: unknown) => !(error instanceof ConstraintError),
+      );
+    });
+
+    test("queries run in the current transaction", async () => {
+      await insertUser();
+      await assert.rejects(
+        Repo.updateOrThrow(
+          prepareChanges(
+            change(await Repo.getOrThrow(User, 1), { name: "x" }),
+            async (cs) => {
+              await Repo.exec(sql`DELETE FROM repo_users`);
+              assert.equal((await Repo.all(User)).length, 0);
+              return addError(cs, "name", "rolled back");
+            },
+          ),
+        ),
+        InvalidChangesetError,
+      );
+      assert.equal((await Repo.all(User)).length, 1);
     });
   });
 

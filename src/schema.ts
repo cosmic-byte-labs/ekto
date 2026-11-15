@@ -372,6 +372,13 @@ export type AnySchema = Schema<any, string>;
 
 const SOURCE = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 
+const schemas = new WeakSet<object>();
+
+/** Whether `value` is a schema created by `schema()`. */
+export function isSchema(value: unknown): value is AnySchema {
+  return typeof value === "object" && value !== null && schemas.has(value);
+}
+
 /**
  * Defines a schema for a table (Ecto's `schema/2`).
  *
@@ -454,6 +461,7 @@ export function schema<const S extends string, const F extends Fields>(
       return attachMeta(record, { schema: self, state: "built", source });
     },
   };
+  schemas.add(self);
   return Object.freeze(self);
 }
 
