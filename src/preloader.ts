@@ -16,6 +16,11 @@ import { type AnySchema, getMeta, putMeta } from "./schema.ts";
 export interface PreloadContext {
   // biome-ignore lint/suspicious/noExplicitAny: queries over any tables
   readonly db: Kysely<any>;
+  /**
+   * Whether the queries of sibling associations may run concurrently: not
+   * in a transaction, whose single connection runs one query at a time.
+   */
+  readonly parallel: boolean;
   /** Runs a read query and returns the raw rows. */
   rows(query: AnyQuery, source: string): Promise<readonly Row[]>;
   /** Loads a row as a record, checking that no column is missing. */
@@ -147,23 +152,31 @@ async function preloadEach(
     }
   }
 
-  // Ecto runs these queries in parallel; ekto runs them in turn, as a
-  // transaction has a single connection.
-  const loaded = new Map<string, (owner: Rec) => unknown>();
-  for (const [name, { query, nested }] of preloads) {
-    const reflection = association(schema, name);
-    loaded.set(
+  // As Ecto's `maybe_pmap`, the associations load concurrently (each with
+  // its nested preloads) unless in a transaction.
+  const load = async ([name, { query, nested }]: [
+    string,
+    { query: Refine | undefined; nested: Preloads },
+  ]) =>
+    [
       name,
       await preloadAssociation(
         context,
-        reflection,
+        association(schema, name),
         owners,
         query,
         nested,
         force,
       ),
-    );
+    ] as const;
+  const entries = [...preloads];
+  const results: (readonly [string, (owner: Rec) => unknown])[] = [];
+  if (context.parallel && entries.length > 1) {
+    results.push(...(await Promise.all(entries.map(load))));
+  } else {
+    for (const entry of entries) results.push(await load(entry));
   }
+  const loaded = new Map(results);
 
   return records.map((record) => {
     if (record === null || record === undefined) return record;

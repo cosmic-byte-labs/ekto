@@ -7,6 +7,7 @@ import {
   PostgresAdapter,
   PostgresIntrospector,
   PostgresQueryCompiler,
+  sql,
 } from "kysely";
 import type { QueryEvent } from "./adapter.ts";
 import {
@@ -60,6 +61,11 @@ const Tag = schema("pl_tags", { id: t.id(), name: t.string() });
 type DB = KyselyDB<
   [typeof User, typeof Post, typeof Comment, typeof Profile, typeof Tag]
 >;
+
+/** A preload refinement whose query takes 300ms (Postgres). */
+// biome-ignore lint/suspicious/noExplicitAny: any query
+const sleepy = <Q extends { where(expression: any): Q }>(query: Q): Q =>
+  query.where(sql<boolean>`(SELECT true FROM pg_sleep(0.3))`);
 
 /** A Repo whose queries compile but never run, to check their SQL. */
 function dummyRepo(): Repo<DB> {
@@ -403,6 +409,26 @@ describe("Repo.preload on Postgres", { skip: skipWithoutPg }, () => {
       "blue",
       "red",
     ]);
+  });
+
+  test("loads sibling associations concurrently, except in a transaction", async () => {
+    // Each query waits 300ms in the database.
+    const slow = { posts: sleepy, profile: sleepy };
+    const timed = async (fn: () => Promise<unknown>) => {
+      const start = performance.now();
+      await fn();
+      return performance.now() - start;
+    };
+    const [user] = await users();
+    assert.ok(user);
+    assert.ok((await timed(() => Repo.preload(user, slow))) < 550);
+    const inTx = await timed(() =>
+      Repo.transact(async (tx) => {
+        await tx.preload(user, slow);
+        return { ok: true, value: null } as const;
+      }),
+    );
+    assert.ok(inTx >= 600, `ran in turn in a transaction (${inTx}ms)`);
   });
 
   test("works in a transaction", async () => {

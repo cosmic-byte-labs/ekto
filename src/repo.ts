@@ -1892,6 +1892,9 @@ function bind<DB>(
   }
 
   const preloadContext: PreloadContext = {
+    get parallel() {
+      return !executor.inTransaction;
+    },
     get db() {
       // biome-ignore lint/suspicious/noExplicitAny: preload queries are built dynamically
       return executor.db as Kysely<any>;
