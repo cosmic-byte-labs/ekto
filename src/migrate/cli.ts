@@ -40,6 +40,12 @@ export interface EktoConfig {
   readonly schemasFolder?: string;
   /** The migrations `gen.schema` writes: `ekto` (the default), `kysely` or `none`. */
   readonly migrationFormat?: MigrationFormat;
+  /**
+   * Whether `gen.schema` gives schemas a UUID primary key and references,
+   * `false` by default (Phoenix's `generators: [binary_id: true]`);
+   * `--binary-id` and `--no-binary-id` override it.
+   */
+  readonly binaryId?: boolean;
 }
 
 const USAGE = `usage: ekto <command> [options]
@@ -67,6 +73,7 @@ options:
   --migration FORMAT    gen.schema's migration: ekto, kysely or none
   --no-migration        as --migration none
   --binary-id           gen.schema: UUID primary key and references
+  --no-binary-id        gen.schema: bigserial primary key (overrides the configuration)
 `;
 
 async function loadConfig(path: string | undefined): Promise<EktoConfig> {
@@ -118,6 +125,7 @@ export async function main(
       migration: { type: "string" },
       "no-migration": { type: "boolean" },
       "binary-id": { type: "boolean" },
+      "no-binary-id": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -163,7 +171,11 @@ export async function main(
           throw new Error(
             "usage: ekto gen.schema <Name> <table> [field:type[:unique]...]",
           );
-        const binaryId = values["binary-id"] === true;
+        const binaryId = values["binary-id"]
+          ? true
+          : values["no-binary-id"]
+            ? false
+            : (config?.binaryId ?? false);
         files = await generateSchema(
           { name, table, attrs: parseAttrs(attrs, { binaryId }), binaryId },
           {

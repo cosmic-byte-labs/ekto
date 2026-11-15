@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -334,6 +334,49 @@ describe("ekto gen.schema", () => {
     await assert.rejects(
       main([...args, "--migration", "kysely"], () => {}),
       /Kysely migrations need the adapter/,
+    );
+  });
+
+  test("binaryId in the configuration sets the primary key type", async () => {
+    const folder = join(dir, "binary");
+    const config = join(folder, "ekto.config.ts");
+    await mkdir(folder);
+    const kysely = JSON.stringify(import.meta.resolve("kysely"));
+    const betterSqlite = JSON.stringify(import.meta.resolve("better-sqlite3"));
+    const sqliteUrl = JSON.stringify(
+      pathToFileURL(join(import.meta.dirname, "../sqlite/index.ts")).href,
+    );
+    await writeFile(
+      config,
+      `import Database from ${betterSqlite};
+import { Kysely, SqliteDialect } from ${kysely};
+import { sqlite } from ${sqliteUrl};
+export default {
+  db: new Kysely({ dialect: new SqliteDialect({ database: new Database(":memory:") }) }),
+  adapter: sqlite(),
+  schemasFolder: ${JSON.stringify(join(folder, "schemas"))},
+  migrationsFolder: ${JSON.stringify(join(folder, "migrations"))},
+  binaryId: true,
+};
+`,
+    );
+    const gen = async (...args: string[]) => {
+      const lines: string[] = [];
+      await main(["gen.schema", ...args, "--config", config], (l) =>
+        lines.push(l),
+      );
+      const migration = lines.find((l) => l.includes("migrations"));
+      assert.ok(migration);
+      return readFile(migration.replace("* creating ", ""), "utf8");
+    };
+    const uuid = /t\.add\("id", "uuid", \{ primaryKey: true \}\);/;
+    const source = await gen("Org", "orgs", "owner_id:references:users");
+    assert.match(source, uuid);
+    assert.match(source, /references\("users", \{ type: "uuid" \}\)/);
+    const bigserial = await gen("Tag", "tags", "--no-binary-id");
+    assert.match(
+      bigserial,
+      /t\.add\("id", "bigserial", \{ primaryKey: true \}\);/,
     );
   });
 });
