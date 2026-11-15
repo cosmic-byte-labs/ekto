@@ -30,6 +30,11 @@ Guides that follow Ecto's own, in `guides/` and in the API docs (`pnpm docs:buil
   [Self-referencing many to many](guides/howtos/self-referencing-many-to-many.md),
   [Test factories](guides/howtos/test-factories.md)
 - [Testing with ekto](guides/testing/testing-with-ekto.md)
+- Migration Guides (after ecto_sql's):
+  [Anatomy of a migration](guides/migrations/anatomy-of-a-migration.md),
+  [Safe migrations](guides/migrations/safe-migrations.md),
+  [Backfilling data](guides/migrations/backfilling-data.md),
+  [Squashing migrations](guides/migrations/squashing-migrations.md)
 
 ## Features
 
@@ -500,7 +505,9 @@ Unlike Ecto, `create(table(...))` adds no `id` column: declare the primary key l
 column, as schemas do. Commands in `change` are reversed on rollback; write `up` and `down` for
 those that cannot be. `m.alter`, `m.drop`, `m.rename`, `index`, `constraint`, `fragment` and
 `m.execute` (SQL, or a function given the transaction's Kysely) cover the rest. Each migration
-runs in a transaction unless it sets `disableDdlTransaction: true`.
+runs in a transaction unless it sets `disableDdlTransaction: true`. The
+[migration guides](guides/migrations/anatomy-of-a-migration.md) cover what runs and how to change
+a busy database safely.
 
 ### The `ekto` command
 

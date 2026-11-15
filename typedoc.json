@@ -18,10 +18,20 @@
     "guides/howtos/dynamic-queries.md",
     "guides/howtos/self-referencing-many-to-many.md",
     "guides/howtos/test-factories.md",
-    "guides/testing/testing-with-ekto.md"
+    "guides/testing/testing-with-ekto.md",
+    "guides/migrations/anatomy-of-a-migration.md",
+    "guides/migrations/safe-migrations.md",
+    "guides/migrations/backfilling-data.md",
+    "guides/migrations/squashing-migrations.md"
   ],
   "highlightLanguages": ["bash", "js", "json", "sql", "ts", "typescript"],
-  "groupOrder": ["Introduction", "How-To's", "Testing", "*"],
+  "groupOrder": [
+    "Introduction",
+    "How-To's",
+    "Testing",
+    "Migration Guides",
+    "*"
+  ],
   "out": "docs/api",
   "excludePrivate": true,
   "excludeInternal": true,
