@@ -8,7 +8,7 @@ import { connectPg, skipWithoutPg } from "../postgres.test-helper.ts";
 import { createRepo, type Repo } from "../repo.ts";
 import { schema, t } from "../schema.ts";
 import { sqlite } from "../sqlite/index.ts";
-import { checkout, sandbox } from "./index.ts";
+import { checkout, sandbox, withSandbox } from "./index.ts";
 
 const User = schema("sandbox_users", { id: t.id(), email: t.string() });
 
@@ -67,6 +67,32 @@ function suite(
       );
     });
 
+    test("the application's Repo runs on the sandbox", async () => {
+      await repo.insertOrThrow(newUser("app@example.com"));
+      assert.equal(repo.inTransaction, false);
+      assert.equal((await box.repo.all(User)).length, 1);
+      const { rows } = await sql<{
+        n: number | string;
+      }>`SELECT count(*) AS n FROM sandbox_users`.execute(repo.kysely);
+      assert.equal(Number(rows[0]?.n), 1);
+    });
+
+    test("and its writes are rolled back too", async () => {
+      assert.deepEqual(await repo.all(User), []);
+    });
+
+    test("a second shared sandbox on the Repo is refused", async () => {
+      const hooks: (() => Promise<void>)[] = [];
+      sandbox(repo, {
+        beforeEach: (fn) => hooks.push(fn),
+        afterEach: (fn) => hooks.push(fn),
+      });
+      const [before, afterHook] = hooks;
+      await assert.rejects(before?.() ?? Promise.resolve(), /already shared/);
+      await afterHook?.();
+      assert.deepEqual(await repo.all(User), []);
+    });
+
     test("checkout and checkin", async () => {
       // A checkout inside a sandbox is a savepoint in its transaction.
       const inner = await checkout(box.repo);
@@ -92,6 +118,90 @@ suite(
 describe("sandbox on Postgres", { skip: skipWithoutPg }, () => {
   if (skipWithoutPg) return;
   suite(
+    "pool",
+    () => connectPg().db,
+    (db) => createRepo({ db, adapter: postgres() }),
+    "bigserial PRIMARY KEY",
+  );
+});
+
+function ownership(
+  name: string,
+  connect: () => AnyKysely,
+  Repo: (db: AnyKysely) => Repo,
+  idType: string,
+) {
+  describe(name, () => {
+    const db = connect();
+    const repo = Repo(db);
+
+    before(async () => {
+      await sql.raw("DROP TABLE IF EXISTS owned_users").execute(db);
+      await sql
+        .raw(`CREATE TABLE owned_users (id ${idType}, email TEXT NOT NULL)`)
+        .execute(db);
+    });
+    after(async () => {
+      await sql.raw("DROP TABLE IF EXISTS owned_users").execute(db);
+      await db.destroy();
+    });
+
+    const Owned = schema("owned_users", { id: t.id(), email: t.string() });
+
+    test("withSandbox redirects the Repo in its async context only", async () => {
+      const result = await withSandbox(repo, async (sandboxed) => {
+        await repo.insertOrThrow(change(Owned.new(), { email: "a@x" }));
+        assert.equal(repo.inTransaction, false);
+        const inside = await new Promise<number>((resolve) =>
+          setTimeout(async () => resolve((await repo.all(Owned)).length), 1),
+        );
+        assert.equal((await sandboxed.all(Owned)).length, 1);
+        return inside;
+      });
+      assert.equal(result, 1, "async work started inside sees the sandbox");
+      assert.deepEqual(await repo.all(Owned), [], "rolled back");
+    });
+
+    test("transactions inside are savepoints", async () => {
+      await withSandbox(repo, async () => {
+        const result = await repo.transact(async (tx) => {
+          await tx.insertOrThrow(change(Owned.new(), { email: "b@x" }));
+          return { ok: false } as const;
+        });
+        assert.equal(result.ok, false);
+        assert.deepEqual(await repo.all(Owned), []);
+        // A checkout of the redirected Repo nests in the sandbox.
+        const inner = await checkout(repo);
+        await inner.repo.insertOrThrow(change(Owned.new(), { email: "c@x" }));
+        await inner.checkin();
+        assert.deepEqual(await repo.all(Owned), []);
+      });
+    });
+
+    test("only Repos made by createRepo can be sandboxed this way", async () => {
+      await withSandbox(repo, async (sandboxed) => {
+        await assert.rejects(
+          withSandbox(sandboxed, async () => {}),
+          /expected the Repo created with createRepo/,
+        );
+      });
+    });
+  });
+}
+
+ownership(
+  "withSandbox on SQLite",
+  () =>
+    new KyselyClass({
+      dialect: new SqliteDialect({ database: new Database(":memory:") }),
+    }),
+  (db) => createRepo({ db, adapter: sqlite() }),
+  "INTEGER PRIMARY KEY AUTOINCREMENT",
+);
+
+describe("withSandbox on Postgres", { skip: skipWithoutPg }, () => {
+  if (skipWithoutPg) return;
+  ownership(
     "pool",
     () => connectPg().db,
     (db) => createRepo({ db, adapter: postgres() }),

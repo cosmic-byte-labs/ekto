@@ -15,6 +15,7 @@
  * that cannot be dumped, a database error) are thrown.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { inspect } from "node:util";
 import {
   type Compilable,
@@ -528,13 +529,69 @@ type ApplyResult =
   | { readonly ok: true; readonly values: Values }
   | { readonly ok: false; readonly changeset: AnyChangeset };
 
-/** Creates a Repo running on the given Kysely instance (Ecto's `use Ecto.Repo`). */
+/**
+ * Creates a Repo running on the given Kysely instance (Ecto's `use Ecto.Repo`).
+ *
+ * In the test sandbox (`ekto/testing`), this Repo runs on the sandbox's
+ * transaction instead, as Ecto's Repo uses the connection the sandbox
+ * gave the calling process.
+ */
 export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
-  return bind(config.adapter, new Executor(config.db, config.onQuery)).repo;
+  const executor = new Executor(config.db, config.onQuery);
+  const root = bind(config.adapter, executor, () => frozen).repo;
+  const current = (): Record<string, unknown> =>
+    (sandboxes.getStore()?.get(executor) ??
+      sharedSandboxes.get(executor) ??
+      root) as unknown as Record<string, unknown>;
+  const repo: Record<string, unknown> = {};
+  for (const key of Object.keys(root))
+    Object.defineProperty(repo, key, {
+      enumerable: true,
+      get: () => current()[key],
+    });
+  const frozen = Object.freeze(repo) as unknown as Repo<DB>;
+  roots.set(frozen, {
+    executor,
+    current: () => current() as unknown as Repo<DB>,
+  });
+  return frozen;
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: Repos over any database type
-const executors = new WeakMap<Repo<any>, Executor<any>>();
+type AnyRepo = Repo<any>;
+// biome-ignore lint/suspicious/noExplicitAny: executors over any database type
+type AnyExecutor = Executor<any>;
+
+/** The executor of each bound Repo. */
+const executors = new WeakMap<AnyRepo, AnyExecutor>();
+/** Repos made by createRepo: their own executor and the Repo they run on now. */
+const roots = new WeakMap<
+  AnyRepo,
+  { readonly executor: AnyExecutor; readonly current: () => AnyRepo }
+>();
+
+/** The sandbox Repos owned by the running async context (Ecto's ownership). */
+const sandboxes = new AsyncLocalStorage<ReadonlyMap<AnyExecutor, AnyRepo>>();
+/** The sandbox Repos shared with every caller (Ecto's shared mode). */
+const sharedSandboxes = new WeakMap<AnyExecutor, AnyRepo>();
+
+/** The executor `repo` runs on now: a sandbox's when one is active. */
+function executorOf<DB>(repo: Repo<DB>): Executor<DB> {
+  const executor = executors.get(roots.get(repo)?.current() ?? repo);
+  if (executor === undefined)
+    throw new TypeError("expected a Repo created with createRepo");
+  return executor as Executor<DB>;
+}
+
+/** The executor of a Repo made by createRepo, which sandboxes replace. */
+function rootExecutorOf<DB>(repo: Repo<DB>): Executor<DB> {
+  const root = roots.get(repo);
+  if (root === undefined)
+    throw new TypeError(
+      "expected the Repo created with createRepo, not a transaction's or sandbox's Repo",
+    );
+  return root.executor as Executor<DB>;
+}
 
 /**
  * Starts the test sandbox's transaction on `repo` (for `ekto/testing`, not
@@ -546,17 +603,51 @@ export async function checkoutSandbox<DB>(repo: Repo<DB>): Promise<{
   readonly repo: Repo<DB>;
   readonly end: (ok: boolean) => Promise<void>;
 }> {
-  const executor = executors.get(repo) as Executor<DB> | undefined;
-  if (executor === undefined)
-    throw new TypeError("expected a Repo created with createRepo");
-  const { executor: sandboxed, end } = await executor.begin(true);
-  return { repo: bind(repo.adapter, sandboxed).repo, end };
+  const { executor, end } = await executorOf(repo).begin(true);
+  return { repo: bind(repo.adapter, executor).repo, end };
+}
+
+/**
+ * Runs `fn` with `repo` running on `sandboxed` in its async context (for
+ * `ekto/testing`; Ecto's sandbox ownership).
+ */
+export function runInSandbox<DB, T>(
+  repo: Repo<DB>,
+  sandboxed: Repo<DB>,
+  fn: () => T,
+): T {
+  const owned = new Map(sandboxes.getStore());
+  owned.set(rootExecutorOf(repo), sandboxed);
+  return sandboxes.run(owned, fn);
+}
+
+/**
+ * Makes `repo` run on `sandboxed` for every caller until the returned
+ * function is called (for `ekto/testing`; Ecto's shared mode).
+ */
+export function shareSandbox<DB>(
+  repo: Repo<DB>,
+  sandboxed: Repo<DB>,
+): () => void {
+  const executor = rootExecutorOf(repo);
+  if (sharedSandboxes.has(executor))
+    throw new Error(
+      "the Repo is already shared with another test's sandbox; tests running " +
+        "concurrently need their own sandbox (use withSandbox)",
+    );
+  sharedSandboxes.set(executor, sandboxed);
+  return () => {
+    if (sharedSandboxes.get(executor) === sandboxed)
+      sharedSandboxes.delete(executor);
+  };
 }
 
 /** A Repo running on one executor: the root, a transaction or a savepoint. */
 function bind<DB>(
   adapter: Adapter,
   executor: Executor<DB>,
+  /** The Repo changesets get as `repo`: the one createRepo returned, for the root. */
+  self?: () => Repo<DB>,
 ): { readonly repo: Repo<DB>; readonly applyWrite: ApplyWrite } {
   const loader: Loader = (type, value) => adapter.load(type.type, value);
 
@@ -590,7 +681,7 @@ function bind<DB>(
         `a changeset with action "${changeset.action}" was given to Repo.${action}`,
       );
     }
-    return new Changeset({ ...changeset, action, repo });
+    return new Changeset({ ...changeset, action, repo: self?.() ?? repo });
   }
 
   /** On insert, non-null record fields count as changes (Ecto's `surface_changes`). */
