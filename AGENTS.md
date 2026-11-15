@@ -1,0 +1,36 @@
+# Working on ekto
+
+This file is for coding agents (Claude Code reads it through `CLAUDE.md`). People start with
+[README.md](README.md); the design is in [docs/design.md](docs/design.md) (on the design PR until it
+merges).
+
+ekto is an Ecto-inspired data layer for TypeScript: schemas, changesets, composable queries, and a
+Repo that is the only part that touches the database. It is a library; there is no server to run.
+
+## Commands
+
+```bash
+pnpm install --frozen-lockfile   # once per worktree (slot setup does it)
+pnpm check                       # lint + typecheck + tests + build; run before pushing
+pnpm test                        # node --test over src/**/*.test.ts
+node --test src/index.test.ts    # one file
+pnpm test:coverage               # tests with Node's built-in coverage
+pnpm format                      # Biome: fix formatting and lint where it can
+pnpm build                       # tsc → dist/ (tests excluded)
+```
+
+## Conventions
+
+- **pnpm only.** Do not add `package-lock.json` or `yarn.lock`. The pnpm version is pinned in
+  `package.json` `packageManager` and in `.slot` `[tools]`.
+- **TypeScript runs natively in Node** (type stripping), with no tsx or ts-node. So only erasable
+  syntax (`erasableSyntaxOnly`): no `enum`, no `namespace`, no constructor parameter properties.
+  Use `as const` objects and unions instead of enums.
+- **Relative imports use the `.ts` extension** (`import { x } from "./schema.ts"`); `tsc` rewrites
+  them to `.js` in `dist/` (`rewriteRelativeImportExtensions`). Type-only imports use `import type`
+  (`verbatimModuleSyntax`).
+- **Tests sit beside the code** as `*.test.ts`, using `node:test` and `node:assert/strict`. Shared
+  test helpers are `*.test-helper.ts`; neither ships in the package.
+- **Node support:** the package supports Node ≥ 22.19 (`engines`); CI tests 22 and 26. Do not use
+  APIs newer than Node 22 in `src/` without a fallback.
+- Formatting is Biome's (2-space indent, double quotes). Do not hand-format against it.

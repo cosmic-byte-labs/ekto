@@ -1,4 +1,21 @@
 version = 1
 
 [project]
-name = "ectojs"
+name = "ekto"
+github = "cosmic-byte-labs/ekto"
+
+# Development runs on Node 26; the package supports Node >= 22.19 (package.json engines, CI matrix).
+[tools]
+node = "26"
+pnpm = "12.21.0"
+
+[[cache]]
+path = "node_modules"
+manifests = ["package.json", "pnpm-lock.yaml"]
+
+[[setup]]
+name = "Node deps"
+run = "pnpm install --frozen-lockfile"
+
+[session]
+prompt = ["ekto is a TypeScript library (no server). `pnpm check` runs lint, typecheck, tests and build; `pnpm test` runs the tests. See AGENTS.md."]

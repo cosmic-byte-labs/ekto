@@ -1,0 +1,36 @@
+{
+  "name": "ekto",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Ecto-inspired data layer for TypeScript: schemas, changesets, composable queries and a Repo as the only side-effecting boundary.",
+  "type": "module",
+  "packageManager": "pnpm@12.21.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "!dist/**/*.test.*"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "node --test 'src/**/*.test.ts'",
+    "test:coverage": "node --test --experimental-test-coverage 'src/**/*.test.ts'",
+    "check": "biome check . && tsc --noEmit && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.7",
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
