@@ -450,16 +450,11 @@ describe("concurrent index warnings (Ecto's runner warnings)", () => {
   };
   const warnings = async (
     t: TestContext,
-    name: string,
-    options: {
-      disableDdlTransaction?: boolean;
-      disableMigrationLock?: boolean;
-    },
-    migrationLock?: "pgAdvisoryLock",
+    options: { disableDdlTransaction?: boolean },
   ) => {
     const emit = t.mock.method(process, "emitWarning", () => {});
     const repo = createRepo({
-      adapter: fake(name),
+      adapter: fake("postgres"),
       database: ":memory:",
       poolSize: 1,
     });
@@ -475,7 +470,6 @@ describe("concurrent index warnings (Ecto's runner warnings)", () => {
             },
           }),
         },
-        ...(migrationLock !== undefined && { migrationLock }),
       });
       await m.migrate();
       await m.rollback();
@@ -485,43 +479,14 @@ describe("concurrent index warnings (Ecto's runner warnings)", () => {
     return emit.mock.calls.map((call) => String(call.arguments[0]));
   };
 
-  test("warn going up and down without disabling the DDL transaction and the lock", async (t) => {
-    const messages = await warnings(t, "postgres", {});
-    assert.equal(messages.length, 4);
-    assert.equal(
-      messages[0],
-      "Migration 1_index has set index `posts_slug_index` on table `posts` to concurrently but did not disable ddl transaction. Please set:\n\n    migration({ disableDdlTransaction: true, ... })\n",
-    );
-    assert.match(messages[1] ?? "", /did not disable migration lock/);
-    assert.match(messages[1] ?? "", /migrationLock: "pgAdvisoryLock"/);
+  test("warn going up and down without disabling the DDL transaction", async (t) => {
+    const message =
+      "Migration 1_index has set index `posts_slug_index` on table `posts` to concurrently but did not disable ddl transaction. Please set:\n\n    migration({ disableDdlTransaction: true, ... })\n";
+    assert.deepEqual(await warnings(t, {}), [message, message]);
   });
 
-  test("only Postgres suggests the advisory lock", async (t) => {
-    const messages = await warnings(t, "sqlite", {
-      disableDdlTransaction: true,
-    });
-    assert.equal(messages.length, 2);
-    assert.match(messages[0] ?? "", /did not disable migration lock/);
-    assert.doesNotMatch(messages[0] ?? "", /pgAdvisoryLock/);
-  });
-
-  test("do not warn when disabled, or with the advisory lock on Postgres", async (t) => {
-    assert.deepEqual(
-      await warnings(t, "postgres", {
-        disableDdlTransaction: true,
-        disableMigrationLock: true,
-      }),
-      [],
-    );
-    assert.deepEqual(
-      await warnings(
-        t,
-        "postgres",
-        { disableDdlTransaction: true },
-        "pgAdvisoryLock",
-      ),
-      [],
-    );
+  test("do not warn about the migration lock, which holds no snapshot", async (t) => {
+    assert.deepEqual(await warnings(t, { disableDdlTransaction: true }), []);
   });
 });
 
@@ -567,9 +532,37 @@ describe("migrator with the Postgres advisory lock", {
   const posts = "mig_posts_advisory";
   after(async () => {
     await sql
-      .raw(`DROP TABLE IF EXISTS "${source}", "${source}_2", "${posts}"`)
+      .raw(
+        `DROP TABLE IF EXISTS "${source}", "${source}_2", "${source}_table", "${posts}"`,
+      )
       .execute(repo.kysely);
     await repo.stop();
+  });
+
+  test("the table lock also lets a migration create an index concurrently", {
+    timeout: 10_000,
+  }, async () => {
+    // The lock transaction holds no snapshot, so CONCURRENTLY does not wait for it.
+    const make = () =>
+      createMigrator({
+        repo,
+        migrationSource: `${source}_table`,
+        migrations: {
+          "1_posts": migration({
+            change(m) {
+              m.create(table(posts), (t) => t.add("slug", "string"));
+            },
+          }),
+          "2_index": migration({
+            disableDdlTransaction: true,
+            change(m) {
+              m.create(index(posts, ["slug"], { concurrently: true }));
+            },
+          }),
+        },
+      });
+    assert.equal((await make().migrate()).length, 2);
+    await make().rollback({ all: true });
   });
 
   test("concurrent migrators run each migration once", async () => {
@@ -599,8 +592,7 @@ describe("migrator with the Postgres advisory lock", {
     assert.equal(a.length + b.length, 1);
   });
 
-  test("lets a migration create an index concurrently, and fails after its retries", async (t) => {
-    t.mock.method(process, "emitWarning", () => {});
+  test("lets a migration create an index concurrently, and fails after its retries", async () => {
     let release = () => {};
     const held = new Promise<void>((resolve) => {
       release = resolve;

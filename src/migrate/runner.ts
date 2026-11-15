@@ -37,8 +37,10 @@ export interface MigratorOptions {
    * Whether and how to lock while migrating so that two migrators never
    * run the same migration (Ecto's `:migration_lock`): `true` (the
    * default) is `"tableLock"`, and `"pgAdvisoryLock"` takes a PostgreSQL
-   * advisory lock instead, which lets migrations create indexes
-   * concurrently without `disableMigrationLock`. Some Postgres-compatible
+   * advisory lock instead, which keeps no transaction open while a
+   * migration runs (so a server's `idle_in_transaction_session_timeout`
+   * cannot end it). Either lets migrations create indexes concurrently.
+   * Some Postgres-compatible
    * systems do not support session-level locks well: PgBouncer in a pool
    * mode other than session, or CockroachDB. On PostgreSQL, the lock holds
    * a connection, so the Repo's pool needs at least two, and migrations
@@ -269,11 +271,14 @@ export function createMigrator(options: MigratorOptions): EktoMigrator {
   };
 
   /**
-   * Ecto's runner warnings for indexes created or dropped concurrently
-   * without disabling the DDL transaction or the migration lock.
+   * Ecto's runner warning for indexes created or dropped concurrently
+   * without disabling the DDL transaction. Ecto also warns when the
+   * migration lock is on, as its lock transaction holds a snapshot that
+   * `CONCURRENTLY` waits for; ekto's runs nothing but `LOCK TABLE`, so it
+   * holds none, and the lock can stay.
    */
   const warnConcurrentIndexes = (entry: Entry, commands: Command[]) => {
-    const { disableDdlTransaction, disableMigrationLock } = entry.migration;
+    if (entry.migration.disableDdlTransaction) return;
     for (const command of commands) {
       if (
         command.command === "executeReversible" ||
@@ -283,22 +288,9 @@ export function createMigrator(options: MigratorOptions): EktoMigrator {
       )
         continue;
       const index = command.object;
-      const set = `Migration ${entry.key} has set index \`${index.name}\` on table \`${index.table}\` to concurrently but did not disable`;
-      if (!disableDdlTransaction)
-        process.emitWarning(
-          `${set} ddl transaction. Please set:\n\n    migration({ disableDdlTransaction: true, ... })\n`,
-        );
-      if (!disableMigrationLock) {
-        if (adapter.name !== "postgres")
-          process.emitWarning(
-            `${set} migration lock. Please set:\n\n    migration({ disableMigrationLock: true, ... })\n`,
-          );
-        else if (lock !== "pgAdvisoryLock")
-          process.emitWarning(
-            `${set} migration lock. Please set:\n\n    migration({ disableMigrationLock: true, ... })\n\n` +
-              `Alternatively, consider using advisory locks during migrations in the migrator's configuration:\n\n    migrationLock: "pgAdvisoryLock"\n`,
-          );
-      }
+      process.emitWarning(
+        `Migration ${entry.key} has set index \`${index.name}\` on table \`${index.table}\` to concurrently but did not disable ddl transaction. Please set:\n\n    migration({ disableDdlTransaction: true, ... })\n`,
+      );
     }
   };
 

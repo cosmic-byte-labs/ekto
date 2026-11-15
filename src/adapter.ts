@@ -77,7 +77,7 @@ export interface MigrationLockOptions {
   /**
    * `tableLock` (the default) locks the migrations table in a transaction;
    * `pgAdvisoryLock` (PostgreSQL) takes a session advisory lock, with no
-   * transaction open, so migrations can create indexes concurrently.
+   * transaction open.
    */
   readonly strategy: MigrationLockStrategy;
   /** How long to wait before trying again for a held advisory lock. */

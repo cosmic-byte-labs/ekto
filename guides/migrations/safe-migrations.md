@@ -60,30 +60,11 @@ export default migration({
 
 ### Good
 
-With Postgres, instead create the index concurrently which does not block writes. There are two
-options:
-
-**Option 1**
-
-Configure the migrator to use advisory locks for locking migrations while running. Advisory locks
-are application-controlled database-level locks, and ekto provides an option to use this type of
-lock. This is the safest option as it avoids the trade-off in Option 2.
-
-Disable the DDL transaction in the migration to avoid a database transaction which is not
-compatible with `CONCURRENTLY` database operations.
+With Postgres, instead create the index concurrently which does not block writes. Disable the DDL
+transaction in the migration to avoid a database transaction which is not compatible with
+`CONCURRENTLY` database operations:
 
 ```ts
-// ekto.config.ts
-import { postgres } from "ekto/postgres";
-
-export default {
-  repo: { adapter: postgres(), url: process.env.DATABASE_URL },
-  migrationLock: "pgAdvisoryLock",
-};
-```
-
-```ts
-// the migration
 export default migration({
   disableDdlTransaction: true,
   change(m) {
@@ -92,24 +73,11 @@ export default migration({
 });
 ```
 
-**Option 2**
-
-Disable the DDL transaction and the migration lock for the migration. By default, ekto with
-Postgres will run migrations with a DDL transaction and a migration lock which also uses another
-transaction. You must disable both of these database transactions to use `CONCURRENTLY`. However,
-disabling the migration lock will allow competing nodes to try to run the same migration at the
-same time (eg, in a multi-node Kubernetes environment that runs migrations before startup).
-Therefore, some nodes may fail startup for a variety of reasons.
-
-```ts
-export default migration({
-  disableDdlTransaction: true,
-  disableMigrationLock: true,
-  change(m) {
-    m.create(index("posts", ["slug"], { concurrently: true }));
-  },
-});
-```
+Ecto also has you disable the migration lock, or use advisory locks, since a concurrent index build
+waits for every transaction that holds a snapshot, and Ecto's lock transaction holds one. ekto's
+lock transaction runs nothing but `LOCK TABLE`, which takes no snapshot, so the migration lock can
+stay on and competing nodes still run the migration only once. (`migrationLock: "pgAdvisoryLock"`
+in `ekto.config.ts` works too.)
 
 The migration may still take a while to run, but reads and updates to rows will continue to work.
 For example, for 100,000,000 rows it took 165 seconds to run the migration, but SELECTS and
@@ -140,19 +108,6 @@ Drop the index concurrently to avoid blocking reads and writes:
 ```ts
 export default migration({
   disableDdlTransaction: true,
-  disableMigrationLock: true,
-  change(m) {
-    m.drop(index("posts", ["slug"], { concurrently: true }));
-  },
-});
-```
-
-Or with advisory locks (preferred):
-
-```ts
-// with migrationLock: "pgAdvisoryLock" in ekto.config.ts
-export default migration({
-  disableDdlTransaction: true,
   change(m) {
     m.drop(index("posts", ["slug"], { concurrently: true }));
   },
@@ -161,7 +116,6 @@ export default migration({
 
 > [!NOTE]
 > Like creating indexes concurrently, dropping concurrently cannot be done inside a transaction.
-> The same caveats about multi-node deployments apply.
 
 ## Adding a reference or foreign key
 

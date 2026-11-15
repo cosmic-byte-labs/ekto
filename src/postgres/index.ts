@@ -368,6 +368,12 @@ pool size via the Repo's configuration:
  * Ecto's `:table_lock`: a transaction locks the migrations table in SHARE
  * UPDATE EXCLUSIVE mode, which conflicts with itself but not with the
  * inserts and deletes of the migration.
+ *
+ * The transaction must run nothing but `LOCK TABLE`, which takes no
+ * snapshot. A query that does (Ecto reads the versions here) would leave
+ * the transaction holding one, and `CREATE INDEX CONCURRENTLY` waits for
+ * every older snapshot, so a migration creating an index concurrently
+ * would wait for its own lock forever.
  */
 async function tableLock<T>(
   // biome-ignore lint/suspicious/noExplicitAny: any database
@@ -392,8 +398,8 @@ async function tableLock<T>(
 /**
  * Ecto's `:pg_advisory_lock`: `pg_try_advisory_lock` on a connection held
  * while the migration runs, retried every `advisoryLockRetryIntervalMs`
- * until `advisoryLockMaxTries` retries fail. No transaction stays open, so
- * `CREATE INDEX CONCURRENTLY` does not wait for the lock. The key stands
+ * until `advisoryLockMaxTries` retries fail. No transaction stays open
+ * while the migration runs. The key stands
  * for the migrations table, as Ecto's (a hash of the prefix and the Repo).
  */
 async function advisoryLock<T>(

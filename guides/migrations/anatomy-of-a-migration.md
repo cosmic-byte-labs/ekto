@@ -172,7 +172,8 @@ the transaction are released when the transaction is committed, which then unblo
 transactions that touch the same records to proceed.
 
 However, there are some scenarios where you don't want a lock. We'll explore these scenarios later
-on (for example, backfilling data and creating indexes).
+on (for example, backfilling data). Creating indexes concurrently is not one of them: the lock's
+transaction runs nothing but `LOCK TABLE`, so it holds no snapshot for `CONCURRENTLY` to wait for.
 
 You can skip this lock by setting `disableMigrationLock: true` in your migration. (`--no-lock` on
 the command, or `migrationLock: false` in `ekto.config.ts`, skips it for every migration.) When
@@ -231,9 +232,9 @@ COMMIT;
 ```
 
 > [!TIP]
-> For Postgres, when disabling transactions, you'll also want to disable the migration lock since
-> that uses yet another transaction. When running these migrations in a multi-node environment,
-> you'll need a process to ensure these migrations are only run once since there is no protection
+> Ecto's guide has you also disable the migration lock for Postgres here, since that lock's
+> transaction holds a snapshot that `CONCURRENTLY` waits for. ekto's lock transaction runs nothing
+> but `LOCK TABLE` and holds no snapshot, so you can keep the lock, and with it the protection
 > against multiple nodes running the same migration at the same exact time.
 
 Disabling both the migration lock and the DDL transaction, your migration will be pretty simple:
@@ -517,7 +518,6 @@ import { index, migration } from "ekto/migrate";
 
 export default migration({
   disableDdlTransaction: true,
-  disableMigrationLock: true,
   change(m) {
     // Drop any invalid index from a previous failed attempt
     m.execute('DROP INDEX CONCURRENTLY IF EXISTS "posts_slug_index"', "");

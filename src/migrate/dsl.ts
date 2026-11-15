@@ -102,7 +102,7 @@ export interface IndexOptions {
   /**
    * Create or drop the index without locking out writes (PostgreSQL
    * `CONCURRENTLY`). It cannot run in a transaction, so the migration needs
-   * `disableDdlTransaction` and `disableMigrationLock`.
+   * `disableDdlTransaction`.
    */
   readonly concurrently?: boolean;
 }
