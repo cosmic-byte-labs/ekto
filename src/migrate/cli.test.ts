@@ -64,7 +64,12 @@ export default () => ({
 `,
     );
     await main(
-      ["--config", join(dir, "ekto.config.ts"), "gen", "create_users"],
+      [
+        "--config",
+        join(dir, "ekto.config.ts"),
+        "gen.migration",
+        "create_users",
+      ],
       () => {},
     );
     const [file] = await readdir(join(dir, "migrations"));
@@ -86,20 +91,35 @@ export default migration({
 
   test("runs the commands", async () => {
     assert.equal(await run("status"), 0);
-    assert.match(lines.join("\n"), /down\s+\d{14}_create_users/);
+    assert.match(lines.join("\n"), /down\s+\d{14}\s+create_users/);
 
     assert.equal(await run("migrate"), 0);
-    assert.match(lines.join("\n"), /== Migrated \d{14}_create_users/);
+    assert.match(lines.join("\n"), /== Migrated \d{14} create_users/);
     await run("migrate");
     assert.deepEqual(lines, ["Migrations already up"]);
 
     await run("status");
-    assert.match(lines.join("\n"), /up\s+\d{14}_create_users/);
+    assert.match(lines.join("\n"), /up\s+\d{14}\s+create_users/);
 
     assert.equal(await run("rollback", "--step", "1"), 0);
-    assert.match(lines.join("\n"), /== Rolled back \d{14}_create_users/);
+    assert.match(lines.join("\n"), /== Rolled back \d{14} create_users/);
     await run("rollback", "--all");
-    assert.deepEqual(lines, ["No migrations to roll back"]);
+    assert.deepEqual(lines, ["Migrations already down"]);
+
+    await run("migrate", "--to", "1");
+    assert.deepEqual(
+      lines,
+      ["Migrations already up"],
+      "nothing up to version 1",
+    );
+    await assert.rejects(
+      run("migrate", "--step", "x"),
+      /--step expects a number/,
+    );
+    assert.equal(await run("migrate", "--no-lock", "--all"), 0);
+    assert.match(lines.join("\n"), /== Migrated/);
+    await run("rollback");
+    assert.match(lines.join("\n"), /== Rolled back/);
   });
 
   test("usage and errors", async () => {

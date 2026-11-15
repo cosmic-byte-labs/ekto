@@ -1,19 +1,13 @@
 /**
- * Runs migrations (Ecto.Migrator) on Kysely's `Migrator`, which keeps track
- * of the executed migrations in its `kysely_migration` table and holds a
- * lock while migrating.
+ * Runs migrations, following Ecto.Migrator: the versions that ran are kept
+ * in the `schema_migrations` table (Ecto.Migration.SchemaMigration), each
+ * migration runs in its own transaction, and a lock is held while it runs.
  */
 
 import { readdir } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { type Kysely, sql } from "kysely";
-import {
-  type Migration as KyselyMigration,
-  type MigrationResultSet,
-  Migrator,
-  NO_MIGRATIONS,
-} from "kysely/migration";
 import type { Adapter } from "../adapter.ts";
 import {
   type Command,
@@ -21,9 +15,14 @@ import {
   isMigration,
   type Migration,
   MigrationError,
+  record,
+  table,
 } from "./dsl.ts";
 
-/** The migrations by name; names sort in the order they run. */
+/**
+ * The migrations, keyed `<version>_<name>` (e.g.
+ * `20260115103000_create_users`); they run in the order of their versions.
+ */
 export type Migrations = Readonly<Record<string, Migration>>;
 
 export interface MigratorOptions {
@@ -33,46 +32,93 @@ export interface MigratorOptions {
   readonly adapter: Adapter;
   /** The migrations, or a function loading them (e.g. `fileMigrations`). */
   readonly migrations: Migrations | (() => Promise<Migrations>);
-  /** Kysely's migration table, `kysely_migration` by default. */
-  readonly migrationTableName?: string;
-  readonly migrationLockTableName?: string;
+  /** The table of executed versions, `schema_migrations` by default (Ecto's `:migration_source`). */
+  readonly migrationSource?: string;
+  /**
+   * Whether to lock while migrating so that two migrators never run the
+   * same migration, `true` by default (Ecto's `:migration_lock`). On
+   * PostgreSQL, the lock holds a connection, so the pool needs at least two.
+   */
+  readonly migrationLock?: boolean;
 }
 
-export interface MigrationStatus {
+/** A migration: its version and name. */
+export interface MigrationInfo {
+  readonly version: number;
   readonly name: string;
+}
+
+export interface MigrationStatus extends MigrationInfo {
   readonly status: "up" | "down";
-  readonly executedAt: Date | undefined;
 }
 
-export interface MigrateOptions {
-  /** Runs this many pending migrations instead of all. */
-  readonly step?: number;
-  /** Runs the pending migrations up to and including this one. */
-  readonly to?: string;
-}
-
-export interface RollbackOptions {
-  /** Rolls back this many migrations, 1 by default. */
-  readonly step?: number;
-  /** Rolls back the migrations down to and including this one. */
-  readonly to?: string;
-  /** Rolls back every executed migration. */
+/** Which migrations to run (Ecto.Migrator's strategies). */
+export interface RunOptions {
+  /** Runs every pending migration. */
   readonly all?: boolean;
+  /** Runs the migrations up to (or, rolling back, down to) this version, inclusive. */
+  readonly to?: number;
+  /** As `to`, but the migration with this version is left out. */
+  readonly toExclusive?: number;
+  /** Runs this many migrations. */
+  readonly step?: number;
 }
 
 /** The migrations that ran, in the order they ran. */
-export type MigrationRun = readonly string[];
+export type MigrationRun = readonly MigrationInfo[];
 
 export interface EktoMigrator {
-  /** Runs pending migrations, all by default (`mix ecto.migrate`). */
-  migrate(options?: MigrateOptions): Promise<MigrationRun>;
+  /** Runs pending migrations, all of them by default (`mix ecto.migrate`). */
+  migrate(options?: RunOptions): Promise<MigrationRun>;
   /** Rolls back executed migrations, the last one by default (`mix ecto.rollback`). */
-  rollback(options?: RollbackOptions): Promise<MigrationRun>;
+  rollback(options?: RunOptions): Promise<MigrationRun>;
   /** Every migration and whether it ran (`mix ecto.migrations`). */
   status(): Promise<readonly MigrationStatus[]>;
 }
 
-async function run(
+/** The name of executed versions whose migration is missing (as Ecto shows them). */
+export const FILE_NOT_FOUND = "** FILE NOT FOUND **";
+
+interface Entry extends MigrationInfo {
+  readonly key: string;
+  readonly migration: Migration;
+}
+
+const KEY = /^(\d+)_(.+)$/;
+
+function entries(migrations: Migrations): Entry[] {
+  const list = Object.entries(migrations).map(([key, migration]) => {
+    const match = KEY.exec(key);
+    if (match === null)
+      throw new MigrationError(
+        `migration ${key} must be named <version>_<name>, e.g. 20260115103000_create_users`,
+      );
+    if (!isMigration(migration))
+      throw new TypeError(`migration ${key} must be created with migration()`);
+    return {
+      key,
+      version: Number(match[1]),
+      name: match[2] as string,
+      migration,
+    };
+  });
+  list.sort((a, b) => a.version - b.version);
+  // Ecto's ensure_no_duplication!/1.
+  for (const [i, entry] of list.entries())
+    for (const other of list.slice(i + 1)) {
+      if (other.version === entry.version)
+        throw new MigrationError(
+          `migrations can't be executed, migration version ${entry.version} is duplicated`,
+        );
+      if (other.name === entry.name)
+        throw new MigrationError(
+          `migrations can't be executed, migration name ${entry.name} is duplicated`,
+        );
+    }
+  return list;
+}
+
+async function runCommands(
   // biome-ignore lint/suspicious/noExplicitAny: any database
   db: Kysely<any>,
   adapter: Adapter,
@@ -96,36 +142,16 @@ async function run(
   }
 }
 
-function toKysely(migration: Migration, adapter: Adapter): KyselyMigration {
-  return {
-    up: (db) => run(db, adapter, migration.up()),
-    down: async (db) => {
-      if (migration.down === undefined)
-        throw new MigrationError(
-          "it defines up but no down, so it cannot be rolled back",
-        );
-      await run(db, adapter, migration.down());
-    },
-  };
-}
-
-function check(result: MigrationResultSet): MigrationRun {
-  if (result.error !== undefined) {
-    const failed = result.results?.find((r) => r.status === "Error");
-    const error = result.error;
-    if (failed && error instanceof Error)
-      error.message = `migration ${failed.migrationName} failed: ${error.message}`;
-    throw error;
-  }
-  return (result.results ?? [])
-    .filter((r) => r.status === "Success")
-    .map((r) => r.migrationName);
+function positive(name: string, value: number | undefined) {
+  if (value !== undefined && !(Number.isInteger(value) && value > 0))
+    throw new TypeError(`${name} must be a positive integer, got ${value}`);
 }
 
 /**
- * Runs `migrations` on `db`. Each migration's commands go through the
- * adapter's `ddl`; Kysely runs the migrations of one call in a single
- * transaction where the database supports transactional DDL.
+ * Runs `migrations` on `db`, following Ecto.Migrator. Each migration runs
+ * in its own transaction (unless it sets `disableDdlTransaction`) together
+ * with recording its version, so a failed migration leaves nothing behind.
+ * Pending migrations run whatever their order relative to the executed ones.
  *
  * ```ts
  * const migrator = createMigrator({
@@ -138,85 +164,156 @@ function check(result: MigrationResultSet): MigrationRun {
  */
 export function createMigrator(options: MigratorOptions): EktoMigrator {
   const { db, adapter } = options;
-  const load = async (): Promise<Migrations> =>
-    typeof options.migrations === "function"
-      ? options.migrations()
-      : options.migrations;
+  const source = options.migrationSource ?? "schema_migrations";
+  const lock = options.migrationLock ?? true;
+  const load = async (): Promise<Entry[]> =>
+    entries(
+      typeof options.migrations === "function"
+        ? await options.migrations()
+        : options.migrations,
+    );
 
-  const migrator = (migrations: Migrations) => {
-    const entries = Object.entries(migrations);
-    for (const [name, migration] of entries)
-      if (!isMigration(migration))
-        throw new TypeError(
-          `migration ${name} must be created with migration()`,
-        );
-    return new Migrator({
+  // Ecto.Migration.SchemaMigration.ensure_schema_migrations_table!/3.
+  const ensureTable = () =>
+    runCommands(
       db,
-      provider: {
-        getMigrations: async () =>
-          Object.fromEntries(
-            entries.map(([name, m]) => [name, toKysely(m, adapter)]),
-          ),
-      },
-      ...(options.migrationTableName && {
-        migrationTableName: options.migrationTableName,
-      }),
-      ...(options.migrationLockTableName && {
-        migrationLockTableName: options.migrationLockTableName,
-      }),
-    });
+      adapter,
+      record("up", (m) =>
+        m.createIfNotExists(table(source, { primaryKey: false }), (t) => {
+          t.add("version", "bigint", { primaryKey: true });
+          t.add("inserted_at", "utc_datetime");
+        }),
+      ),
+    );
+
+  const versions = async (): Promise<Set<number>> => {
+    const { rows } = await sql<{
+      version: unknown;
+    }>`SELECT version FROM ${sql.table(source)}`.execute(db);
+    return new Set(rows.map((row) => Number(row.version)));
   };
 
-  const positiveStep = (step: number | undefined) => {
-    if (step !== undefined && !(Number.isInteger(step) && step > 0))
-      throw new TypeError(`step must be a positive integer, got ${step}`);
+  /** Runs `fn` with the executed versions, holding the lock unless the migration disables it. */
+  const locked = async <T>(
+    entry: Entry,
+    fn: (executed: Set<number>) => Promise<T>,
+  ): Promise<T> =>
+    lock &&
+    !entry.migration.disableMigrationLock &&
+    adapter.lockForMigrations !== undefined
+      ? adapter.lockForMigrations(db, source, async () => fn(await versions()))
+      : fn(await versions());
+
+  const execute = async (entry: Entry, direction: "up" | "down") => {
+    try {
+      let commands: Command[];
+      if (direction === "up") commands = entry.migration.up();
+      else if (entry.migration.down === undefined)
+        throw new MigrationError(
+          "it defines up but no down, so it cannot be rolled back",
+        );
+      else commands = entry.migration.down();
+      // biome-ignore lint/suspicious/noExplicitAny: any database
+      const body = async (q: Kysely<any>) => {
+        await runCommands(q, adapter, commands);
+        if (direction === "up")
+          await sql`INSERT INTO ${sql.table(source)} (version, inserted_at) VALUES (${entry.version}, ${adapter.dump("utc_datetime", new Date())})`.execute(
+            q,
+          );
+        else
+          await sql`DELETE FROM ${sql.table(source)} WHERE version = ${entry.version}`.execute(
+            q,
+          );
+      };
+      if (entry.migration.disableDdlTransaction) await body(db);
+      else await db.transaction().execute(body);
+    } catch (error) {
+      if (error instanceof Error)
+        error.message = `migration ${entry.key} failed: ${error.message}`;
+      throw error;
+    }
+  };
+
+  /** Ecto.Migrator.run/4: picks the pending migrations, then runs each under the lock. */
+  const run = async (
+    direction: "up" | "down",
+    opts: RunOptions,
+  ): Promise<MigrationRun> => {
+    positive("step", opts.step);
+    const all = await load();
+    await ensureTable();
+    const executed = await versions();
+    let pending =
+      direction === "up"
+        ? all.filter((e) => !executed.has(e.version))
+        : all.filter((e) => executed.has(e.version)).reverse();
+    const within = (target: number, inclusive: boolean) => (e: Entry) =>
+      direction === "up"
+        ? inclusive
+          ? e.version <= target
+          : e.version < target
+        : inclusive
+          ? e.version >= target
+          : e.version > target;
+    if (opts.all) {
+      // every pending migration
+    } else if (opts.to !== undefined)
+      pending = pending.filter(within(opts.to, true));
+    else if (opts.toExclusive !== undefined)
+      pending = pending.filter(within(opts.toExclusive, false));
+    else if (opts.step !== undefined) pending = pending.slice(0, opts.step);
+    else
+      throw new TypeError(
+        "expected one of the all, to, toExclusive or step options",
+      );
+    const ran: MigrationInfo[] = [];
+    for (const entry of pending) {
+      const done = await locked(entry, async (current) => {
+        // Another migrator may have run it since the pending ones were read.
+        if (current.has(entry.version) === (direction === "up")) return false;
+        await execute(entry, direction);
+        return true;
+      });
+      if (done) ran.push({ version: entry.version, name: entry.name });
+    }
+    return ran;
   };
 
   return {
-    async migrate(opts = {}) {
-      positiveStep(opts.step);
-      const m = migrator(await load());
-      if (opts.step === undefined && opts.to === undefined)
-        return check(await m.migrateToLatest());
-      const infos = await m.getMigrations();
-      const pending = infos.filter((i) => i.executedAt === undefined);
-      let target: string | undefined;
-      if (opts.to !== undefined) {
-        if (!infos.some((i) => i.name === opts.to))
-          throw new MigrationError(`unknown migration ${opts.to}`);
-        // Ecto never rolls back on migrate: an executed target is a no-op.
-        target = pending.find((i) => i.name === opts.to)?.name;
-      } else {
-        target = pending[Math.min(opts.step ?? 1, pending.length) - 1]?.name;
-      }
-      if (target === undefined) return [];
-      return check(await m.migrateTo(target));
-    },
-
-    async rollback(opts = {}) {
-      positiveStep(opts.step);
-      const m = migrator(await load());
-      const infos = await m.getMigrations();
-      const executed = infos.filter((i) => i.executedAt !== undefined);
-      if (executed.length === 0) return [];
-      let keep: number;
-      if (opts.all) keep = 0;
-      else if (opts.to !== undefined) {
-        keep = executed.findIndex((i) => i.name === opts.to);
-        if (keep === -1) return [];
-      } else keep = Math.max(executed.length - (opts.step ?? 1), 0);
-      if (keep === executed.length) return [];
-      const target = executed[keep - 1]?.name ?? NO_MIGRATIONS;
-      return check(await m.migrateTo(target));
-    },
+    migrate: (opts = { all: true }) =>
+      run(
+        "up",
+        opts.to === undefined &&
+          opts.toExclusive === undefined &&
+          opts.step === undefined
+          ? { all: true }
+          : opts,
+      ),
+    rollback: (opts = { step: 1 }) =>
+      run(
+        "down",
+        opts.all ||
+          opts.to !== undefined ||
+          opts.toExclusive !== undefined ||
+          opts.step !== undefined
+          ? opts
+          : { step: 1 },
+      ),
 
     async status() {
-      const infos = await migrator(await load()).getMigrations();
-      return infos.map((i) => ({
-        name: i.name,
-        status: i.executedAt === undefined ? "down" : "up",
-        executedAt: i.executedAt,
+      const all = await load();
+      await ensureTable();
+      const executed = await versions();
+      const known = new Set(all.map((e) => e.version));
+      const statuses: MigrationStatus[] = all.map((e) => ({
+        status: executed.has(e.version) ? "up" : "down",
+        version: e.version,
+        name: e.name,
       }));
+      for (const version of executed)
+        if (!known.has(version))
+          statuses.push({ status: "up", version, name: FILE_NOT_FOUND });
+      return statuses.sort((a, b) => a.version - b.version);
     },
   };
 }
@@ -225,14 +322,19 @@ const MIGRATION_FILE = /\.(m|c)?(j|t)s$/;
 
 /**
  * Loads the migrations in `folder`: every `.ts`, `.js`, `.mts`… file
- * (declaration files excepted) whose default export is a `migration()`,
- * named by its file name without the extension.
+ * (declaration files excepted) named `<version>_<name>` whose default
+ * export is a `migration()`. Other files are ignored, as Ecto does.
  */
 export function fileMigrations(folder: string): () => Promise<Migrations> {
   return async () => {
     const dir = resolve(folder);
     const files = (await readdir(dir))
-      .filter((f) => MIGRATION_FILE.test(f) && !/\.d\.(m|c)?ts$/.test(f))
+      .filter(
+        (f) =>
+          MIGRATION_FILE.test(f) &&
+          !/\.d\.(m|c)?ts$/.test(f) &&
+          KEY.test(f.slice(0, -extname(f).length)),
+      )
       .sort();
     const migrations: Record<string, Migration> = {};
     for (const file of files) {

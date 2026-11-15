@@ -2,6 +2,7 @@
  * PostgreSQL support (`ekto/postgres`).
  */
 
+import { type Kysely, sql } from "kysely";
 import type { Adapter, ConstraintViolation } from "../adapter.ts";
 import type { ConstraintType } from "../changeset.ts";
 import type { DriverValue, KyselyTables } from "../kysely.ts";
@@ -197,7 +198,34 @@ export function postgres(): Adapter {
     dump: dumpValue,
     toConstraints,
     ddl: postgresDdl,
+    lockForMigrations,
   });
+}
+
+/**
+ * Ecto's `:table_lock` strategy: a transaction on its own connection locks
+ * the migrations table in SHARE UPDATE EXCLUSIVE mode, which conflicts with
+ * itself but not with the inserts and deletes of the migration running on
+ * another connection.
+ */
+async function lockForMigrations<T>(
+  // biome-ignore lint/suspicious/noExplicitAny: any database
+  db: Kysely<any>,
+  table: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const trx = await db.startTransaction().execute();
+  try {
+    await sql`LOCK TABLE ${sql.table(table)} IN SHARE UPDATE EXCLUSIVE MODE`.execute(
+      trx,
+    );
+    const result = await fn();
+    await trx.commit().execute();
+    return result;
+  } catch (error) {
+    await trx.rollback().execute();
+    throw error;
+  }
 }
 
 export { postgresDdl };

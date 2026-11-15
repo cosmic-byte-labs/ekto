@@ -687,15 +687,30 @@ export function reverse(command: Command): Command | undefined {
 
 const MIGRATION = Symbol.for("ekto.migration");
 
-export type MigrationDefinition =
-  | { readonly change: (m: MigrationContext) => void }
-  | {
-      readonly up: (m: MigrationContext) => void;
-      readonly down?: (m: MigrationContext) => void;
-    };
+/** How a migration runs (Ecto's `@disable_ddl_transaction` and `@disable_migration_lock`). */
+export interface MigrationRunOptions {
+  /**
+   * Runs the migration outside a transaction, for commands that cannot run
+   * in one, such as `CREATE INDEX CONCURRENTLY` on PostgreSQL.
+   */
+  readonly disableDdlTransaction?: boolean;
+  /** Runs the migration without holding the migration lock. */
+  readonly disableMigrationLock?: boolean;
+}
+
+export type MigrationDefinition = MigrationRunOptions &
+  (
+    | { readonly change: (m: MigrationContext) => void }
+    | {
+        readonly up: (m: MigrationContext) => void;
+        readonly down?: (m: MigrationContext) => void;
+      }
+  );
 
 export interface Migration {
   readonly [MIGRATION]: true;
+  readonly disableDdlTransaction: boolean;
+  readonly disableMigrationLock: boolean;
   /** The commands to run when migrating. */
   up(): Command[];
   /** The commands to run when rolling back, or `undefined` when irreversible. */
@@ -729,10 +744,15 @@ export class MigrationError extends Error {
  * ```
  */
 export function migration(definition: MigrationDefinition): Migration {
+  const runOptions = {
+    [MIGRATION]: true as const,
+    disableDdlTransaction: definition.disableDdlTransaction === true,
+    disableMigrationLock: definition.disableMigrationLock === true,
+  };
   if ("change" in definition) {
     const { change } = definition;
     return Object.freeze({
-      [MIGRATION]: true as const,
+      ...runOptions,
       up: () => record("up", change),
       down: () =>
         record("down", change)
@@ -750,7 +770,7 @@ export function migration(definition: MigrationDefinition): Migration {
   }
   const { up, down } = definition;
   return Object.freeze({
-    [MIGRATION]: true as const,
+    ...runOptions,
     up: () => record("up", up),
     down: down && (() => record("down", down)),
   });

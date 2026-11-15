@@ -44,6 +44,18 @@ export interface Adapter {
    * Adapters without it cannot run migrations.
    */
   ddl?(command: DdlCommand): readonly string[];
+  /**
+   * Runs `fn` holding the lock that keeps two migrators from running the
+   * same migration (Ecto's `lock_for_migrations/3`); `table` is the
+   * migrations table. `fn` runs its queries on `db`, not in the lock's
+   * transaction. Adapters without it run migrations unlocked.
+   */
+  lockForMigrations?<T>(
+    // biome-ignore lint/suspicious/noExplicitAny: any database
+    db: Kysely<any>,
+    table: string,
+    fn: () => Promise<T>,
+  ): Promise<T>;
 }
 
 /** A constraint the database reported as violated. */

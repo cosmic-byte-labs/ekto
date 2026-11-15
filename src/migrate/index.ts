@@ -26,6 +26,7 @@ export {
   type MigrationContext,
   type MigrationDefinition,
   MigrationError,
+  type MigrationRunOptions,
   type ModifyOptions,
   migration,
   type OnDelete,
@@ -44,11 +45,12 @@ export {
 export {
   createMigrator,
   type EktoMigrator,
+  FILE_NOT_FOUND,
   fileMigrations,
-  type MigrateOptions,
+  type MigrationInfo,
   type MigrationRun,
   type MigrationStatus,
   type Migrations,
   type MigratorOptions,
-  type RollbackOptions,
+  type RunOptions,
 } from "./runner.ts";

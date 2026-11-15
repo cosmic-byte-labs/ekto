@@ -1,6 +1,6 @@
 /**
  * The `ekto` command: `ekto migrate`, `ekto rollback`, `ekto status` and
- * `ekto gen <name>` (Ecto's `mix ecto.migrate`, `ecto.rollback`,
+ * `ekto gen.migration <name>` (Ecto's `mix ecto.migrate`, `ecto.rollback`,
  * `ecto.migrations` and `ecto.gen.migration`).
  *
  * The configuration file (`ekto.config.ts` or `ekto.config.js`, or
@@ -23,20 +23,28 @@ export interface EktoConfig {
   readonly adapter: Adapter;
   /** `migrations` by default, relative to the working directory. */
   readonly migrationsFolder?: string;
-  readonly migrationTableName?: string;
+  /** The table of executed versions, `schema_migrations` by default. */
+  readonly migrationSource?: string;
+  /** Whether to lock while migrating, `true` by default. */
+  readonly migrationLock?: boolean;
 }
 
 const USAGE = `usage: ekto <command> [options]
 
 commands:
-  migrate             run pending migrations (--step N, --to NAME)
-  rollback            roll back migrations (--step N, --to NAME, --all)
-  status              list migrations and whether they ran
-  gen <name>          create a migration file
+  migrate               run pending migrations, all by default
+  rollback              roll back migrations, the last one by default
+  status                list migrations and whether they ran
+  gen.migration <name>  create a migration file
 
 options:
-  --config FILE       configuration file (default: ekto.config.ts or .js)
-  --migrations DIR    migrations folder (overrides the configuration)
+  --all                 run (or roll back) every migration
+  --step N              run (or roll back) N migrations
+  --to VERSION          run up to (or roll back down to) VERSION, inclusive
+  --to-exclusive VERSION  as --to, without VERSION itself
+  --no-lock             do not lock the migrations table
+  --config FILE         configuration file (default: ekto.config.ts or .js)
+  --migrations DIR      migrations folder (overrides the configuration)
 `;
 
 /** `20260115103000`, the UTC time (Ecto's `timestamp/0`). */
@@ -122,7 +130,9 @@ export async function main(
       migrations: { type: "string" },
       step: { type: "string" },
       to: { type: "string" },
+      "to-exclusive": { type: "string" },
       all: { type: "boolean" },
+      "no-lock": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -131,10 +141,23 @@ export async function main(
     out(USAGE);
     return command === undefined && !values.help ? 1 : 0;
   }
-  const step = values.step === undefined ? undefined : Number(values.step);
+  const number = (name: string, value: string | undefined) => {
+    if (value === undefined) return undefined;
+    if (!/^\d+$/.test(value))
+      throw new Error(`--${name} expects a number, got ${value}`);
+    return Number(value);
+  };
+  const strategy = {
+    ...(values.all && { all: true }),
+    ...(values.step !== undefined && { step: number("step", values.step) }),
+    ...(values.to !== undefined && { to: number("to", values.to) }),
+    ...(values["to-exclusive"] !== undefined && {
+      toExclusive: number("to-exclusive", values["to-exclusive"]),
+    }),
+  };
 
-  if (command === "gen") {
-    if (rest.length !== 1) throw new Error("usage: ekto gen <name>");
+  if (command === "gen.migration") {
+    if (rest.length !== 1) throw new Error("usage: ekto gen.migration <name>");
     let folder = values.migrations;
     if (folder === undefined) {
       // The configuration is optional here: generating needs no database.
@@ -159,28 +182,31 @@ export async function main(
       migrations: fileMigrations(
         values.migrations ?? config.migrationsFolder ?? "migrations",
       ),
-      migrationTableName: config.migrationTableName,
+      ...(config.migrationSource !== undefined && {
+        migrationSource: config.migrationSource,
+      }),
+      migrationLock: values["no-lock"] ? false : config.migrationLock,
     });
     if (command === "status") {
+      // As `mix ecto.migrations` prints it.
       const statuses = await migrator.status();
-      out(`\n${pad("Status", 8)}Migration`);
-      out("-".repeat(40));
-      for (const s of statuses) out(`${pad(s.status, 8)}${s.name}`);
+      out(`\n  ${pad("Status", 10)}${pad("Migration ID", 16)}Migration Name`);
+      out("-".repeat(50));
+      for (const s of statuses)
+        out(`  ${pad(s.status, 10)}${pad(String(s.version), 16)}${s.name}`);
       out("");
       return 0;
     }
     const ran =
       command === "migrate"
-        ? await migrator.migrate({ step, to: values.to })
-        : await migrator.rollback({ step, to: values.to, all: values.all });
+        ? await migrator.migrate(strategy)
+        : await migrator.rollback(strategy);
     if (ran.length === 0)
+      out(`Migrations already ${command === "migrate" ? "up" : "down"}`);
+    for (const m of ran)
       out(
-        command === "migrate"
-          ? "Migrations already up"
-          : "No migrations to roll back",
+        `== ${command === "migrate" ? "Migrated" : "Rolled back"} ${m.version} ${m.name}`,
       );
-    for (const name of ran)
-      out(`== ${command === "migrate" ? "Migrated" : "Rolled back"} ${name}`);
     return 0;
   } finally {
     await config.db.destroy();
