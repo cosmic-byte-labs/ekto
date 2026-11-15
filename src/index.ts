@@ -6,6 +6,31 @@ export type {
   QueryEvent,
   QueryResult,
 } from "./adapter.ts";
+export {
+  type Association,
+  type AssociationName,
+  type AssociationsOf,
+  association,
+  associations,
+  type BelongsTo,
+  belongsTo,
+  buildAssoc,
+  type Cardinality,
+  type HasMany,
+  type HasOne,
+  hasMany,
+  hasOne,
+  isLoaded,
+  type ManyToMany,
+  manyToMany,
+  type Preloaded,
+  type PreloadedFields,
+  type PreloadQuery,
+  type PreloadRefine,
+  type PreloadSpec,
+  type Reflection,
+  type RelatedSchema,
+} from "./association.ts";
 export * from "./changeset.ts";
 export {
   ChangeError,
@@ -32,6 +57,7 @@ export {
   type Operation,
   type RunResult,
 } from "./multi.ts";
+export type { PreloadOptions } from "./preloader.ts";
 export {
   createRepo,
   type DeleteOptions,
@@ -72,6 +98,8 @@ export {
   putMeta,
   type RecordState,
   type Schema,
+  type SchemaClass,
+  type SchemaOf,
   schema,
   t,
   type ValueOfField,

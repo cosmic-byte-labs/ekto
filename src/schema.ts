@@ -17,6 +17,18 @@
  * Records are plain objects; like Ecto's `__meta__`, each one carries hidden
  * metadata (its schema and whether it was built or loaded) under a symbol key
  * that is non-enumerable, so it does not show up in spreads or JSON.
+ *
+ * `schema()` returns a class. A schema with associations extends it, so that
+ * schemas can refer to each other (TypeScript cannot infer two constants
+ * whose types refer to each other, but resolves classes lazily):
+ *
+ * ```ts
+ * class User extends schema("users", { id: t.id(), email: t.string() }) {
+ *   static associations = {
+ *     posts: hasMany(() => Post, { foreignKey: "author_id" }),
+ *   };
+ * }
+ * ```
  */
 
 import * as types from "./type.ts";
@@ -256,15 +268,31 @@ type NewValue<F> =
 
 type Simplify<T> = { [K in keyof T]: T[K] } & {};
 
+/**
+ * The metadata key of a record, typed with its schema so that functions
+ * such as `Repo.preload` know the record's associations. Optional, so plain
+ * objects with the right fields are records too.
+ */
+type WithMeta<S extends AnySchema> = { readonly [meta]?: Meta<S> };
+
 /** A record of the schema as loaded from the database. */
-export type Infer<S extends AnySchema> = Simplify<{
-  -readonly [K in keyof S["fields"]]: LoadedValue<S["fields"][K]>;
-}>;
+export type Infer<S extends AnySchema> = Simplify<
+  {
+    -readonly [K in keyof S["fields"]]: LoadedValue<S["fields"][K]>;
+  } & WithMeta<S>
+>;
 
 /** A record of the schema as built by `Schema.new()`, before it is inserted. */
-export type New<S extends AnySchema> = Simplify<{
-  -readonly [K in keyof S["fields"]]: NewValue<S["fields"][K]>;
-}>;
+export type New<S extends AnySchema> = Simplify<
+  {
+    -readonly [K in keyof S["fields"]]: NewValue<S["fields"][K]>;
+  } & WithMeta<S>
+>;
+
+/** The schema of a record type, from its metadata key. */
+export type SchemaOf<R> = R extends { readonly [meta]?: Meta<infer S> }
+  ? S
+  : never;
 
 /** The field names of a schema. */
 export type FieldName<S extends AnySchema> = keyof S["fields"] & string;
@@ -282,8 +310,8 @@ export type ValueOfField<
 /** Where a record is in its life: built in memory, loaded, or deleted. */
 export type RecordState = "built" | "loaded" | "deleted";
 
-export interface Meta {
-  readonly schema: AnySchema;
+export interface Meta<S extends AnySchema = AnySchema> {
+  readonly schema: S;
   readonly state: RecordState;
   readonly source: string;
 }
@@ -364,19 +392,39 @@ export interface Schema<F extends Fields = Fields, S extends string = string> {
    * `struct(User, attrs)` when given attributes). Attributes are not cast or
    * validated; use a changeset for external input.
    */
-  readonly new: (attrs?: Partial<New<Schema<F>>>) => New<Schema<F>>;
+  // Quoted: an unquoted `new(…)` would declare a construct signature.
+  "new"<This extends AnySchema>(
+    this: This,
+    attrs?: Partial<New<This>>,
+  ): New<This>;
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: a schema with any fields
 export type AnySchema = Schema<any, string>;
 
+/**
+ * What `schema()` returns: the schema, as a class to extend when it has
+ * associations. Records are not instances of it; build them with `new()`.
+ */
+export type SchemaClass<
+  F extends Fields = Fields,
+  S extends string = string,
+> = Schema<F, S> & (abstract new () => object);
+
 const SOURCE = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 
 const schemas = new WeakSet<object>();
 
-/** Whether `value` is a schema created by `schema()`. */
+/** Whether `value` is a schema created by `schema()`, or a class extending one. */
 export function isSchema(value: unknown): value is AnySchema {
-  return typeof value === "object" && value !== null && schemas.has(value);
+  for (
+    let current = value;
+    typeof current === "function";
+    current = Object.getPrototypeOf(current)
+  ) {
+    if (schemas.has(current)) return true;
+  }
+  return false;
 }
 
 /**
@@ -389,7 +437,7 @@ export function isSchema(value: unknown): value is AnySchema {
 export function schema<const S extends string, const F extends Fields>(
   source: S,
   fields: F,
-): Schema<F, S> {
+): SchemaClass<F, S> {
   if (!SOURCE.test(source))
     throw new TypeError(`invalid schema source: ${JSON.stringify(source)}`);
 
@@ -433,36 +481,51 @@ export function schema<const S extends string, const F extends Fields>(
     const { options } = fields[name] as AnyField;
     defaults[name] = options.hasDefault ? options.default : null;
   }
+  const frozenFields = Object.freeze({ ...fields });
 
-  const self: Schema<F, S> = {
-    source,
-    fields: Object.freeze({ ...fields }),
-    persistedFields: pick((o) => !o.virtual),
-    virtualFields: pick((o) => o.virtual),
-    primaryKey: pick((o) => o.primaryKey),
-    autogenerateId,
-    autogenerateFields: pick((o) => typeof o.autogenerate === "function"),
-    autoupdateFields: pick((o) => o.autoupdate !== undefined),
-    readAfterWrites: pick((o) => o.readAfterWrites),
-    redactFields: pick((o) => o.redact),
-    type: (field) => {
+  class Base {
+    static readonly source = source;
+    static readonly fields = frozenFields;
+    static readonly persistedFields = pick((o) => !o.virtual);
+    static readonly virtualFields = pick((o) => o.virtual);
+    static readonly primaryKey = pick((o) => o.primaryKey);
+    static readonly autogenerateId = autogenerateId;
+    static readonly autogenerateFields = pick(
+      (o) => typeof o.autogenerate === "function",
+    );
+    static readonly autoupdateFields = pick((o) => o.autoupdate !== undefined);
+    static readonly readAfterWrites = pick((o) => o.readAfterWrites);
+    static readonly redactFields = pick((o) => o.redact);
+
+    constructor() {
+      throw new TypeError(
+        `records are plain objects; build one with ${source} schema's new()`,
+      );
+    }
+
+    static type(field: string) {
       const definition = fields[field];
       if (!definition)
         throw new TypeError(`unknown field ${field} in schema ${source}`);
       return definition.type;
-    },
-    new: (attrs = {}) => {
+    }
+
+    static new(this: AnySchema | undefined, attrs: object = {}) {
       for (const key of Object.keys(attrs)) {
         if (!Object.hasOwn(fields, key)) {
           throw new TypeError(`unknown field ${key} in schema ${source}`);
         }
       }
-      const record = { ...cloneDefaults(defaults), ...attrs } as New<Schema<F>>;
+      const record = { ...cloneDefaults(defaults), ...attrs };
+      // `this` is the class extending the schema, when there is one.
+      // biome-ignore lint/complexity/noThisInStatic: the subclass, not Base
+      const self = isSchema(this) ? this : (Base as unknown as AnySchema);
       return attachMeta(record, { schema: self, state: "built", source });
-    },
-  };
-  schemas.add(self);
-  return Object.freeze(self);
+    }
+  }
+  Object.defineProperty(Base, "name", { value: source });
+  schemas.add(Base);
+  return Object.freeze(Base) as unknown as SchemaClass<F, S>;
 }
 
 /** Copies mutable defaults (arrays, objects) so records never share them. */

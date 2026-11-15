@@ -6,8 +6,11 @@ import {
   type Infer,
   isSchema,
   load,
+  type Meta,
+  meta,
   type New,
   putMeta,
+  type SchemaOf,
   schema,
   t,
 } from "./schema.ts";
@@ -45,6 +48,7 @@ describe("schema types", () => {
           password_hash: string;
           inserted_at: Date;
           updated_at: Date;
+          readonly [meta]?: Meta<typeof User>;
         }
       >
     >;
@@ -63,6 +67,7 @@ describe("schema types", () => {
           password_hash: string | null;
           inserted_at: Date | null;
           updated_at: Date | null;
+          readonly [meta]?: Meta<typeof User>;
         }
       >
     >;
@@ -250,7 +255,46 @@ describe("custom types", () => {
       dump: (v) => ok(v),
     };
     const Code = schema("codes", { code: t.custom(upper) });
-    type _code = Expect<Equal<Infer<typeof Code>, { code: string }>>;
+    type _code = Expect<
+      Equal<
+        Infer<typeof Code>,
+        { code: string; readonly [meta]?: Meta<typeof Code> }
+      >
+    >;
     assert.equal(load(Code, { code: "ab" }).code, "ab");
+  });
+});
+
+describe("schema classes", () => {
+  class Account extends schema("accounts", { id: t.id(), name: t.string() }) {
+    static readonly label = "account";
+  }
+
+  test("a class extending a schema is the schema of its records", () => {
+    assert.ok(isSchema(Account));
+    assert.equal(Account.source, "accounts");
+    assert.deepEqual(Account.persistedFields, ["id", "name"]);
+
+    const built = Account.new({ name: "a" });
+    assert.equal(getMeta(built)?.schema, Account);
+    const loaded = load(Account, { id: 1, name: "b" });
+    assert.equal(getMeta(loaded)?.schema, Account);
+    type _schema = Expect<
+      Equal<SchemaOf<Infer<typeof Account>>, typeof Account>
+    >;
+  });
+
+  test("records are plain objects, not instances", () => {
+    assert.throws(
+      () => new (Account as unknown as new () => object)(),
+      /records are plain objects; build one with accounts schema's new\(\)/,
+    );
+    assert.equal(Object.getPrototypeOf(Account.new()), Object.prototype);
+  });
+
+  test("the schema is frozen", () => {
+    const Plain = schema("plains", { id: t.id() });
+    assert.ok(Object.isFrozen(Plain));
+    assert.equal(Plain.name, "plains");
   });
 });

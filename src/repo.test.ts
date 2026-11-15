@@ -31,7 +31,7 @@ import { Multi } from "./multi.ts";
 import { type KyselyDB, postgres } from "./postgres/index.ts";
 import { connectPg, skipWithoutPg } from "./postgres.test-helper.ts";
 import { createRepo, type Repo } from "./repo.ts";
-import { getMeta, type Infer, schema, t } from "./schema.ts";
+import { getMeta, type Infer, type New, schema, t } from "./schema.ts";
 import { sql } from "./sql.ts";
 import { CastError, string } from "./type.ts";
 import type { Equal, Expect } from "./type-test.test-helper.ts";
@@ -93,7 +93,7 @@ const DDL = `
 type DB = KyselyDB<[typeof User, typeof Post]>;
 
 const userChangeset = (
-  data: Infer<typeof User> | ReturnType<typeof User.new>,
+  data: Infer<typeof User> | New<typeof User>,
   params: Record<string, unknown>,
 ) =>
   pipe(

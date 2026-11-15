@@ -37,6 +37,13 @@ import {
   type QueryEvent,
   type QueryResult,
 } from "./adapter.ts";
+import type {
+  AssociationName,
+  PreloadedFields,
+  PreloadQuery,
+  PreloadSpec,
+  RelatedSchema,
+} from "./association.ts";
 import {
   type Action,
   type AnyChangeset,
@@ -62,6 +69,12 @@ import {
 import type { DriverTypes, KyselyTable } from "./kysely.ts";
 import { Multi, type MultiResult, type Operation } from "./multi.ts";
 import {
+  assocQuery,
+  type PreloadContext,
+  type PreloadOptions,
+  preload,
+} from "./preloader.ts";
+import {
   type AnyField,
   type AnySchema,
   getMeta,
@@ -71,6 +84,7 @@ import {
   load,
   putMeta,
   type RecordState,
+  type SchemaOf,
 } from "./schema.ts";
 import { isQueryable, type Queryable, Sql, sql } from "./sql.ts";
 import {
@@ -447,12 +461,56 @@ export interface Repo<DB = any> {
     fn: (tx: Repo<DB>) => Promise<R>,
   ): Promise<R>;
 
+  /**
+   * Preloads associations into a record, a list of records of one schema
+   * or null (Ecto's `Repo.preload/3`), with one query per association.
+   * Returns copies with the associations set; associations already loaded
+   * are kept unless `force` is set, and their nested preloads still run.
+   *
+   * ```ts
+   * const post = await Repo.preload(post, { author: true, comments: "author" });
+   * ```
+   */
+  preload<
+    R extends object | null,
+    const P extends PreloadSpec<SchemaOf<NonNullable<R>>, DB>,
+  >(
+    records: readonly R[],
+    spec: P,
+    options?: PreloadOptions,
+  ): Promise<WithPreloads<R, P>[]>;
+  preload<R extends object, const P extends PreloadSpec<SchemaOf<R>, DB>>(
+    record: R,
+    spec: P,
+    options?: PreloadOptions,
+  ): Promise<R & PreloadedFields<SchemaOf<R>, P>>;
+  preload<R extends object, const P extends PreloadSpec<SchemaOf<R>, DB>>(
+    record: R | null,
+    spec: P,
+    options?: PreloadOptions,
+  ): Promise<(R & PreloadedFields<SchemaOf<R>, P>) | null>;
+
+  /**
+   * A Kysely query of the records associated with a record or a list of
+   * records of one schema (Ecto's `Ecto.assoc/2`), to refine and run, e.g.
+   * `Repo.all(Comment, Repo.assoc(post, "comments").orderBy("id"))`.
+   */
+  assoc<R extends object, N extends AssociationName<SchemaOf<R>>>(
+    records: R | readonly R[],
+    name: N,
+  ): PreloadQuery<DB, RelatedSchema<SchemaOf<R>, N>>;
+
   /** Builds a loaded record from a raw database row (Ecto's `Repo.load/2`). */
   load<S extends AnySchema>(
     schema: S,
     row: Readonly<Record<string, unknown>>,
   ): Infer<S>;
 }
+
+/** A record (or null) with the associations of `P` loaded. */
+type WithPreloads<R, P> = R extends object
+  ? R & PreloadedFields<SchemaOf<R>, P>
+  : R;
 
 type Entries = readonly (readonly [string, unknown])[];
 type Values = Readonly<Record<string, unknown>>;
@@ -1577,6 +1635,21 @@ function bind<DB>(
     return { ok: true, value: changes };
   }
 
+  const preloadContext: PreloadContext = {
+    get db() {
+      // biome-ignore lint/suspicious/noExplicitAny: preload queries are built dynamically
+      return executor.db as Kysely<any>;
+    },
+    rows: async (query, source) =>
+      (await executor.execute(compileRead(query, "preload"), source)).rows,
+    loadRow,
+    loadField,
+    param: (schema, field, value) =>
+      dumpFields("query", schema, [
+        [field, queryParam(schema, field, value, "preload")],
+      ])[0]?.[1],
+  };
+
   const repo: Repo<DB> = {
     adapter,
     get kysely() {
@@ -1628,6 +1701,10 @@ function bind<DB>(
     updateAll: updateAll as Repo["updateAll"],
     deleteAll: deleteAll as Repo["deleteAll"],
     transact: transact as Repo["transact"],
+    preload: ((input: unknown, spec: unknown, options?: PreloadOptions) =>
+      preload(preloadContext, input, spec, options)) as Repo["preload"],
+    assoc: ((input: unknown, name: string) =>
+      assocQuery(preloadContext, input, name)) as unknown as Repo<DB>["assoc"],
     load: ((schema: AnySchema, row: Values) =>
       load(schema, row, loader)) as Repo["load"],
   };
