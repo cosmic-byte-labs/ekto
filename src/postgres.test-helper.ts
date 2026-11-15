@@ -5,6 +5,7 @@
 
 import { Kysely, PostgresDialect } from "kysely";
 import pg from "pg";
+import { utcTimestamps } from "./postgres/index.ts";
 
 export const pgUrl: string | undefined = process.env.EKTO_PG_URL;
 
@@ -12,22 +13,11 @@ export const pgUrl: string | undefined = process.env.EKTO_PG_URL;
 export const skipWithoutPg: string | false =
   pgUrl === undefined ? "set EKTO_PG_URL to run Postgres tests" : false;
 
-// Read `timestamp` (without time zone) as text: it holds UTC (see `postgres()`).
-const TIMESTAMP_OID = 1114;
-
 export function connectPg<DB>(): { db: Kysely<DB>; pool: pg.Pool } {
   const pool = new pg.Pool({
     connectionString: pgUrl,
     max: 4,
-    types: {
-      getTypeParser: ((oid: number, format?: "text" | "binary") =>
-        oid === TIMESTAMP_OID
-          ? (value: string) => value
-          : pg.types.getTypeParser(
-              oid,
-              format,
-            )) as typeof pg.types.getTypeParser,
-    },
+    types: utcTimestamps(pg.types),
   });
   const db = new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
   return { db, pool };

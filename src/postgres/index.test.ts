@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { postgres } from "./index.ts";
+import { sql } from "kysely";
+import pg from "pg";
+import { connectPg, skipWithoutPg } from "../postgres.test-helper.ts";
+import { postgres, utcTimestamps } from "./index.ts";
 
 const adapter = postgres();
 
@@ -81,5 +84,42 @@ describe("postgres adapter", () => {
     );
     assert.deepEqual(adapter.toConstraints(error("42P01")), []);
     assert.deepEqual(adapter.toConstraints("nope"), []);
+  });
+});
+
+describe("utcTimestamps", () => {
+  const types = utcTimestamps(pg.types);
+
+  test("parses timestamp and timestamp[] text as UTC", () => {
+    assert.deepEqual(
+      types.getTypeParser(1114, "text")("2026-01-02 10:30:00.5"),
+      new Date("2026-01-02T10:30:00.500Z"),
+    );
+    assert.deepEqual(
+      types.getTypeParser(1115, "text")('{"2026-01-02 10:30:00",NULL}'),
+      [new Date("2026-01-02T10:30:00Z"), null],
+    );
+  });
+
+  test("keeps the other parsers", () => {
+    assert.equal(types.getTypeParser(23, "text")("42"), 42);
+    assert.equal(types.getTypeParser(1184), pg.types.getTypeParser(1184));
+  });
+
+  test("reads timestamps from the database as UTC", {
+    skip: skipWithoutPg,
+  }, async () => {
+    const { db, pool } = connectPg();
+    try {
+      const { rows } = await sql<{ at: Date; ats: Date[] }>`
+        SELECT '2026-01-02 10:30:00'::timestamp AS at,
+          ARRAY['2026-01-02 10:30:00'::timestamp] AS ats`.execute(db);
+      assert.deepEqual(rows[0], {
+        at: new Date("2026-01-02T10:30:00Z"),
+        ats: [new Date("2026-01-02T10:30:00Z")],
+      });
+    } finally {
+      await pool.end();
+    }
   });
 });

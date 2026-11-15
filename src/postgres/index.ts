@@ -173,20 +173,55 @@ function toConstraints(error: unknown): readonly ConstraintViolation[] {
   return quoted === undefined ? [] : [{ type, constraint: quoted }];
 }
 
+// The OIDs of `timestamp`, `timestamp[]` and `text[]`.
+const TIMESTAMP_OID = 1114;
+const TIMESTAMP_ARRAY_OID = 1115;
+const TEXT_ARRAY_OID = 1009;
+
+/** node-postgres's `types` (`pg.types`): the parser of each type OID. */
+export type TypeParsers = {
+  // biome-ignore lint/suspicious/noExplicitAny: the parsers' results
+  getTypeParser(oid: number, format?: "text" | "binary"): any;
+};
+
+const parseUtc = (value: string | null): unknown =>
+  value === null ? null : loadTimestamp(value);
+
+/**
+ * node-postgres type parsers that read `timestamp` (without time zone) and
+ * `timestamp[]` columns as UTC, as Ecto writes them, instead of in the
+ * client's local time zone. The other types keep the given parsers:
+ *
+ * ```ts
+ * import pg from "pg";
+ * const pool = new pg.Pool({ connectionString, types: utcTimestamps(pg.types) });
+ * ```
+ */
+export function utcTimestamps(types: TypeParsers): TypeParsers {
+  const getTypeParser = (oid: number, format?: "text" | "binary") => {
+    if (format === "binary") return types.getTypeParser(oid, format);
+    if (oid === TIMESTAMP_OID) return parseUtc;
+    if (oid === TIMESTAMP_ARRAY_OID) {
+      const parseArray = types.getTypeParser(TEXT_ARRAY_OID, "text") as (
+        value: string,
+      ) => (string | null)[];
+      return (value: string) => parseArray(value).map(parseUtc);
+    }
+    return types.getTypeParser(oid, format);
+  };
+  return { getTypeParser };
+}
+
 /**
  * The PostgreSQL adapter, for Kysely's `PostgresDialect` with node-postgres.
  *
  * Columns created as Ecto creates them (`timestamp` without time zone,
- * holding UTC) must be read as text, or node-postgres reads them in the
- * client's local time zone. Configure the pool's type parsers:
+ * holding UTC) must be read as UTC, or node-postgres reads them in the
+ * client's local time zone. Configure the pool with {@link utcTimestamps}:
  *
  * ```ts
  * import pg from "pg";
- * const types = {
- *   getTypeParser: (oid: number, format?: "text" | "binary") =>
- *     oid === 1114 ? (v: string) => v : pg.types.getTypeParser(oid, format),
- * };
- * new pg.Pool({ connectionString, types });
+ * new pg.Pool({ connectionString, types: utcTimestamps(pg.types) });
  * ```
  *
  * `timestamptz` columns work either way.
