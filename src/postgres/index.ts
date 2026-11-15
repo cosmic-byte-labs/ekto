@@ -2,9 +2,11 @@
  * PostgreSQL support (`ekto/postgres`).
  */
 
+import type { Adapter } from "../adapter.ts";
 import type { DriverValue, KyselyTables } from "../kysely.ts";
 import type { AnySchema } from "../schema.ts";
 import { quoteIdentifierAnsi, type SqlSyntax } from "../sql.ts";
+import type { PrimitiveType } from "../type.ts";
 
 /** How PostgreSQL writes `sql` values: `$1`, `$2`… and double-quoted identifiers. */
 export const postgresSyntax: SqlSyntax = Object.freeze({
@@ -49,3 +51,118 @@ export type KyselyDB<Schemas extends readonly AnySchema[]> = KyselyTables<
   Schemas,
   PostgresTypes
 >;
+
+const INTEGER = /^-?\d+$/;
+// `timestamp` text as Postgres writes it: "2026-01-02 10:30:00.123456",
+// optionally with an offset ("+00", "+05:30").
+const TIMESTAMP =
+  /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}(?::?\d{2})?)?$/i;
+
+const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+
+function loadInteger(value: unknown): unknown {
+  if (typeof value === "bigint") {
+    const n = Number(value);
+    return Number.isSafeInteger(n) ? n : value;
+  }
+  // node-postgres returns `int8` as a string so no precision is lost.
+  if (typeof value === "string" && INTEGER.test(value)) {
+    const n = Number(value);
+    return Number.isSafeInteger(n) ? n : value;
+  }
+  return value;
+}
+
+function loadTimestamp(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const match = TIMESTAMP.exec(value);
+  if (!match) return value;
+  const [, date, time, fraction = "", offset] = match;
+  const ms = fraction.slice(0, 3).padEnd(3, "0");
+  // `timestamp` (without time zone) holds UTC, as Ecto writes it.
+  let zone = offset ?? "Z";
+  if (/^[+-]\d{2}$/.test(zone)) zone += ":00";
+  return new Date(`${date}T${time}.${ms}${zone}`);
+}
+
+function loadValue(type: PrimitiveType, value: unknown): unknown {
+  if (typeof type !== "string") {
+    return Array.isArray(value)
+      ? value.map((item) => (item === null ? null : loadValue(type[1], item)))
+      : value;
+  }
+  switch (type) {
+    case "id":
+    case "integer":
+      return loadInteger(value);
+    case "float":
+      // `numeric` columns read into float fields come back as strings.
+      return typeof value === "string" && value.trim() !== ""
+        ? Number(value)
+        : value;
+    case "date":
+      // node-postgres parses `date` into a Date at local midnight.
+      return value instanceof Date
+        ? `${pad(value.getFullYear(), 4)}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`
+        : value;
+    case "time":
+      // Ecto's :time has no fractional seconds; `time` columns may.
+      return typeof value === "string" ? value.replace(/\.\d+$/, "") : value;
+    case "utc_datetime":
+    case "utc_datetime_msec":
+      return loadTimestamp(value);
+    default:
+      return value;
+  }
+}
+
+function dumpValue(type: PrimitiveType, value: unknown): unknown {
+  if (typeof type !== "string") {
+    return Array.isArray(value)
+      ? value.map((item) => (item === null ? null : dumpValue(type[1], item)))
+      : value;
+  }
+  switch (type) {
+    case "utc_datetime":
+    case "utc_datetime_msec":
+      // An explicit UTC string, so `timestamp` columns store UTC whatever
+      // the client's time zone (node-postgres would send local time).
+      return value instanceof Date ? value.toISOString() : value;
+    case "binary":
+      return value instanceof Uint8Array && !Buffer.isBuffer(value)
+        ? Buffer.from(value.buffer, value.byteOffset, value.byteLength)
+        : value;
+    case "map":
+      // node-postgres would send a top-level array as a Postgres array.
+      return JSON.stringify(value);
+    default:
+      return value;
+  }
+}
+
+/**
+ * The PostgreSQL adapter, for Kysely's `PostgresDialect` with node-postgres.
+ *
+ * Columns created as Ecto creates them (`timestamp` without time zone,
+ * holding UTC) must be read as text, or node-postgres reads them in the
+ * client's local time zone. Configure the pool's type parsers:
+ *
+ * ```ts
+ * import pg from "pg";
+ * const types = {
+ *   getTypeParser: (oid: number, format?: "text" | "binary") =>
+ *     oid === 1114 ? (v: string) => v : pg.types.getTypeParser(oid, format),
+ * };
+ * new pg.Pool({ connectionString, types });
+ * ```
+ *
+ * `timestamptz` columns work either way.
+ */
+export function postgres(): Adapter {
+  return Object.freeze({
+    name: "postgres",
+    syntax: postgresSyntax,
+    load: loadValue,
+    dump: dumpValue,
+  });
+}

@@ -647,23 +647,32 @@ describe("constraints", () => {
 });
 
 describe("optimisticLock and prepareChanges", () => {
-  test("filters on the current version and increments it when prepared", () => {
+  // What Repo does before writing.
+  const runPrepare = async (cs: AnyChangeset) => {
+    let acc = cs;
+    for (const fn of cs.prepare) acc = await fn(acc);
+    return acc;
+  };
+
+  test("filters on the current version and increments it when prepared", async () => {
     const cs = optimisticLock(loaded(), "lock_version");
     assert.deepEqual(cs.filters, { lock_version: 1 });
     assert.deepEqual(cs.changes, {});
-    const prepared = cs.prepare.reduce((acc, fn) => fn(acc), cs);
+    const prepared = await runPrepare(cs);
     assert.deepEqual(prepared.changes, { lock_version: 2 });
   });
 
-  test("rolls over at the 32-bit limit and takes an incrementer", () => {
+  test("rolls over at the 32-bit limit and takes an incrementer", async () => {
     const at = (v: number) => change(loaded(), { lock_version: v });
-    const run = (cs: AnyChangeset) =>
-      cs.prepare.reduce((acc, fn) => fn(acc), cs).changes;
-    assert.deepEqual(run(optimisticLock(at(2_147_483_647), "lock_version")), {
-      lock_version: 1,
-    });
+    const run = async (cs: AnyChangeset) => (await runPrepare(cs)).changes;
     assert.deepEqual(
-      run(
+      await run(optimisticLock(at(2_147_483_647), "lock_version")),
+      {
+        lock_version: 1,
+      },
+    );
+    assert.deepEqual(
+      await run(
         pipe(
           at(5),
           optimisticLock("lock_version", (v) => v + 10),
@@ -675,13 +684,13 @@ describe("optimisticLock and prepareChanges", () => {
     );
   });
 
-  test("prepareChanges runs functions in order", () => {
+  test("prepareChanges runs functions in order, awaiting async ones", async () => {
     const cs = pipe(
       change(loaded()),
-      prepareChanges((c) => putChange(c, "name", "one")),
+      prepareChanges(async (c) => putChange(c, "name", "one")),
       prepareChanges((c) => putChange(c, "name", `${c.changes.name}-two`)),
     );
-    assert.deepEqual(cs.prepare.reduce((acc, fn) => fn(acc), cs).changes, {
+    assert.deepEqual((await runPrepare(cs)).changes, {
       name: "one-two",
     });
   });

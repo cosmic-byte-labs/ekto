@@ -1,6 +1,16 @@
 // Public entry point of ekto.
 
+export type { Adapter, QueryEvent, QueryResult } from "./adapter.ts";
 export * from "./changeset.ts";
+export {
+  ChangeError,
+  MultiplePrimaryKeyError,
+  MultipleResultsError,
+  NoPrimaryKeyFieldError,
+  NoPrimaryKeyValueError,
+  NoResultsError,
+  StaleEntryError,
+} from "./errors.ts";
 export type {
   DriverTypes,
   DriverValue,
@@ -9,6 +19,15 @@ export type {
   KyselyTable,
   KyselyTables,
 } from "./kysely.ts";
+export {
+  createRepo,
+  type DeleteOptions,
+  type InsertOptions,
+  type Repo,
+  type RepoConfig,
+  type UpdateOptions,
+  type WriteResult,
+} from "./repo.ts";
 export {
   type AnyField,
   type AnySchema,

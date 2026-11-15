@@ -22,6 +22,7 @@
  * errors come first.
  */
 
+import type { Repo } from "./repo.ts";
 import { type AnyField, Field, getMeta } from "./schema.ts";
 import {
   type ArrayType,
@@ -88,6 +89,14 @@ type Changes<D> = { readonly [K in keyof D]?: D[K] };
 
 type Types = Readonly<Record<string, Type<unknown>>>;
 
+/**
+ * A function Repo runs before writing (see `prepareChanges`). It may be
+ * async; `changeset.repo` is the Repo doing the write.
+ */
+export type PrepareFn<D extends object> = (
+  changeset: Changeset<D>,
+) => Changeset<D> | Promise<Changeset<D>>;
+
 interface ChangesetFields<D extends object> {
   readonly data: D;
   readonly types: Types;
@@ -100,7 +109,8 @@ interface ChangesetFields<D extends object> {
   readonly constraints: readonly Constraint[];
   readonly filters: Readonly<Record<string, unknown>>;
   readonly action: Action | null;
-  readonly prepare: readonly ((changeset: Changeset<D>) => Changeset<D>)[];
+  readonly repo: Repo | null;
+  readonly prepare: readonly PrepareFn<D>[];
   readonly emptyValues: readonly unknown[];
 }
 
@@ -129,8 +139,10 @@ export class Changeset<D extends object> implements ChangesetFields<D> {
   /** Extra conditions Repo adds to update and delete queries. */
   readonly filters: Readonly<Record<string, unknown>>;
   readonly action: Action | null;
+  /** The Repo the changeset was given to, set by Repo (Ecto's `repo`). */
+  readonly repo: Repo | null;
   /** Functions Repo runs before writing (see `prepareChanges`). */
-  readonly prepare: readonly ((changeset: Changeset<D>) => Changeset<D>)[];
+  readonly prepare: readonly PrepareFn<D>[];
   readonly emptyValues: readonly unknown[];
 
   constructor(fields: ChangesetFields<D>) {
@@ -145,6 +157,7 @@ export class Changeset<D extends object> implements ChangesetFields<D> {
     this.constraints = Object.freeze([...fields.constraints]);
     this.filters = Object.freeze({ ...fields.filters });
     this.action = fields.action;
+    this.repo = fields.repo;
     this.prepare = Object.freeze([...fields.prepare]);
     this.emptyValues = fields.emptyValues;
     Object.freeze(this);
@@ -217,6 +230,7 @@ function emptyChangeset<D extends object>(data: D, types: Types): Changeset<D> {
     constraints: [],
     filters: {},
     action: null,
+    repo: null,
     prepare: [],
     emptyValues: defaultEmptyValues,
   });
@@ -1569,20 +1583,19 @@ export function exclusionConstraint(...args: unknown[]): unknown {
 /**
  * Registers a function Repo runs on the changeset just before writing, inside
  * the transaction (Ecto's `prepare_changes`); for example to update a counter
- * cache. Functions run in the order they were added.
+ * cache through `changeset.repo`. Functions run in the order they were added
+ * and may be async.
  */
 export function prepareChanges<D extends object>(
   changeset: Changeset<D>,
-  fn: (changeset: Changeset<D>) => Changeset<D>,
+  fn: PrepareFn<D>,
 ): Changeset<D>;
 export function prepareChanges<D extends object>(
-  fn: (changeset: Changeset<D>) => Changeset<D>,
+  fn: PrepareFn<D>,
 ): (changeset: Changeset<D>) => Changeset<D>;
 export function prepareChanges(...args: unknown[]): unknown {
-  return dual(
-    args,
-    (changeset, fn: (changeset: AnyChangeset) => AnyChangeset) =>
-      update(changeset, { prepare: [...changeset.prepare, fn] }),
+  return dual(args, (changeset, fn: PrepareFn<object>) =>
+    update(changeset, { prepare: [...changeset.prepare, fn] }),
   );
 }
 
