@@ -761,6 +761,69 @@ describe("Repo on Postgres", { skip: skipWithoutPg }, () => {
     });
   });
 
+  describe("exists and aggregate", () => {
+    test("exists checks a table or a query for rows", async () => {
+      assert.equal(await Repo.exists(User), false);
+      await insertUser({ age: 20 });
+      assert.equal(await Repo.exists(User), true);
+      assert.equal(
+        await Repo.exists(sql`SELECT id FROM repo_users WHERE age > ${30};`),
+        false,
+      );
+      assert.equal(
+        await Repo.exists(
+          db.selectFrom("repo_users").select("id").where("age", "=", 20),
+        ),
+        true,
+      );
+      assert.match(queries.at(-1)?.sql ?? "", /LIMIT 1$/);
+    });
+
+    test("aggregate computes over a table, loading through the field types", async () => {
+      assert.equal(await Repo.aggregate(User, "count"), 0);
+      assert.equal(await Repo.aggregate(User, "sum", "age"), null);
+      await insertUser({ age: 20, score: "1.5" });
+      await insertUser({ email: "b@example.com", age: 25, score: "2" });
+      await insertUser({ email: "c@example.com" });
+      assert.equal(await Repo.aggregate(User, "count"), 3);
+      assert.equal(await Repo.aggregate(User, "count", "age"), 2);
+      const sum = await Repo.aggregate(User, "sum", "age");
+      type _sum = Expect<Equal<typeof sum, number | null>>;
+      assert.equal(sum, 45);
+      const avg = await Repo.aggregate(User, "avg", "age");
+      type _avg = Expect<Equal<typeof avg, number | null>>;
+      assert.equal(avg, 22.5);
+      // Decimal fields keep the database's precision.
+      assert.equal(Number(await Repo.aggregate(User, "avg", "score")), 1.75);
+      assert.equal(await Repo.aggregate(User, "max", "email"), "c@example.com");
+      const first = await Repo.aggregate(User, "min", "inserted_at");
+      assert.ok(first instanceof Date);
+      await assert.rejects(
+        Repo.aggregate(User, "sum", "password" as never),
+        /virtual/,
+      );
+    });
+
+    test("aggregate computes over the rows of a query", async () => {
+      await insertUser({ age: 20 });
+      await insertUser({ email: "b@example.com", age: 25 });
+      const adults = db
+        .selectFrom("repo_users")
+        .select(["id", "age"])
+        .where("age", ">", 21);
+      assert.equal(await Repo.aggregate(adults, "count"), 1);
+      assert.equal(await Repo.aggregate(adults, "max", "age"), 25);
+      assert.equal(
+        await Repo.aggregate(sql`SELECT age FROM repo_users LIMIT 1`, "count"),
+        1,
+      );
+      await assert.rejects(
+        Repo.aggregate(adults, "median" as never, "age"),
+        /unknown aggregate/,
+      );
+    });
+  });
+
   describe("upserts", () => {
     test("onConflict nothing returns the record without reading back", async () => {
       const ann = await insertUser({ name: "Ann" });
@@ -1144,6 +1207,45 @@ describe("Repo on Postgres", { skip: skipWithoutPg }, () => {
         (await Repo.all(Post)).map((p) => p.title),
         ["t", "t"],
       );
+    });
+
+    test("all, one and exists read in the transaction", async () => {
+      const multi = Multi.new<DB>()
+        .insert("user", ann())
+        .all("users", User)
+        .one("found", User, ({ user }) =>
+          db
+            .selectFrom("repo_users")
+            .selectAll()
+            .where("id", "=", String(user.id)),
+        )
+        .all("ids", db.selectFrom("repo_users").select("id"))
+        .one("none", User, sql`SELECT * FROM repo_users WHERE id = ${0}`)
+        .exists("any", User)
+        .exists("posts", ({ user }) =>
+          db
+            .selectFrom("repo_posts")
+            .select("id")
+            .where("user_id", "=", user.id),
+        );
+      const result = await Repo.transact(multi);
+      assert.ok(result.ok);
+      const { value } = result;
+      type _users = Expect<Equal<typeof value.users, Infer<typeof User>[]>>;
+      type _found = Expect<
+        Equal<typeof value.found, Infer<typeof User> | null>
+      >;
+      type _any = Expect<Equal<typeof value.any, boolean>>;
+      assert.deepEqual(
+        value.users.map((u) => u.email),
+        ["ann@example.com"],
+      );
+      assert.equal(value.found?.id, value.user.id);
+      assert.deepEqual(value.ids, [{ id: "1" }]);
+      assert.equal(value.none, null);
+      assert.equal(value.any, true);
+      assert.equal(value.posts, false);
+      assert.equal(Multi.new().all("u", User).toList()[0]?.[1].kind, "read");
     });
 
     test("invalid changesets fail before any query", async () => {

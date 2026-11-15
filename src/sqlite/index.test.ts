@@ -332,4 +332,29 @@ describe("Repo on SQLite", () => {
     assert.equal(admins.length, 1);
     assert.equal(admins[0]?.admin, true);
   });
+
+  test("exists and aggregate", async () => {
+    assert.equal(await Repo.exists(User), false);
+    assert.equal(await Repo.aggregate(User, "max", "age"), null);
+    await insertUser({ age: 20, admin: true });
+    await insertUser({ email: "b@example.com", age: 25 });
+    assert.equal(await Repo.exists(User), true);
+    assert.equal(
+      await Repo.exists(
+        db.selectFrom("users").where("admin", "=", 1).select("id"),
+      ),
+      true,
+    );
+    assert.equal(await Repo.aggregate(User, "count"), 2);
+    assert.equal(await Repo.aggregate(User, "avg", "age"), 22.5);
+    assert.equal(await Repo.aggregate(User, "sum", "age"), 45);
+    assert.equal(await Repo.aggregate(User, "max", "admin"), true);
+    assert.equal(
+      await Repo.aggregate(
+        db.selectFrom("users").select("age").where("age", ">", 21),
+        "count",
+      ),
+      1,
+    );
+  });
 });

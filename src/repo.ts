@@ -78,6 +78,7 @@ import {
 import {
   type AnyField,
   type AnySchema,
+  type FieldName,
   getMeta,
   type Infer,
   type Inserted,
@@ -87,6 +88,7 @@ import {
   putMeta,
   type RecordState,
   type SchemaOf,
+  type ValueOfField,
 } from "./schema.ts";
 import { isQueryable, type Queryable, Sql, sql } from "./sql.ts";
 import {
@@ -218,6 +220,17 @@ export type Query<Row = unknown> =
   | Compilable<Row>
   | CompiledQuery<Row>
   | RawBuilder<Row>;
+
+/** The aggregates of `Repo.aggregate` (Ecto's). */
+export type Aggregate = "count" | "avg" | "sum" | "min" | "max";
+
+const AGGREGATES: ReadonlySet<string> = new Set([
+  "count",
+  "avg",
+  "sum",
+  "min",
+  "max",
+]);
 
 /** The row type of a query; untyped queries give `Record<string, unknown>`. */
 export type RowOf<Q> = RowType<
@@ -397,6 +410,55 @@ export interface Repo<DB = any> {
     query: SchemaQuery<S, Q>,
   ): Promise<Infer<S>>;
   oneOrThrow<Q extends Query>(query: Q): Promise<RowOf<Q>>;
+
+  /**
+   * Whether a schema's table, or a query, has any rows (Ecto's
+   * `Repo.exists?/2`). The query runs as a subquery with `LIMIT 1`.
+   */
+  exists(queryable: AnySchema | Query): Promise<boolean>;
+
+  /**
+   * Computes an aggregate over a schema's table (Ecto's `Repo.aggregate/3`
+   * and `/4`). `count` without a field counts rows; with one, its non-null
+   * values. `sum`, `min` and `max` are loaded through the field's type, as is
+   * `avg` of a decimal field; `avg` of other fields is a number. All but
+   * `count` are `null` for no rows.
+   */
+  aggregate<S extends AnySchema>(
+    schema: S,
+    aggregate: "count",
+  ): Promise<number>;
+  aggregate<S extends AnySchema>(
+    schema: S,
+    aggregate: "count",
+    field: FieldName<S>,
+  ): Promise<number>;
+  aggregate<S extends AnySchema, F extends FieldName<S>>(
+    schema: S,
+    aggregate: "avg",
+    field: F,
+  ): Promise<
+    | (NonNullable<ValueOfField<S, F>> extends number
+        ? number
+        : NonNullable<ValueOfField<S, F>>)
+    | null
+  >;
+  aggregate<S extends AnySchema, F extends FieldName<S>>(
+    schema: S,
+    aggregate: "sum" | "min" | "max",
+    field: F,
+  ): Promise<NonNullable<ValueOfField<S, F>> | null>;
+  /**
+   * Computes an aggregate over the rows of a query, run as a subquery.
+   * `count` is a number; other aggregates are returned as the driver gives
+   * them.
+   */
+  aggregate(query: Query, aggregate: "count", column?: string): Promise<number>;
+  aggregate(
+    query: Query,
+    aggregate: Exclude<Aggregate, "count">,
+    column: string,
+  ): Promise<unknown>;
 
   /**
    * Runs a query and returns its rows as the driver gives them (Ecto's
@@ -1450,6 +1512,75 @@ function bind<DB>(
     };
   }
 
+  /** A read query as a subquery: its SQL without a trailing semicolon. */
+  function subquery(input: unknown, fn: string): CompiledQuery {
+    const compiled = compileRead(input, fn);
+    return CompiledQuery.raw(compiled.sql.replace(/[\s;]+$/, ""), [
+      ...compiled.parameters,
+    ]);
+  }
+
+  async function exists(input: unknown): Promise<boolean> {
+    let compiled: CompiledQuery;
+    if (isSchema(input)) {
+      const table = adapter.syntax.quoteIdentifier(input.source);
+      compiled = CompiledQuery.raw(`SELECT 1 FROM ${table} LIMIT 1`, []);
+    } else {
+      const { sql: text, parameters } = subquery(input, "exists");
+      compiled = CompiledQuery.raw(`SELECT 1 FROM (${text}) AS q LIMIT 1`, [
+        ...parameters,
+      ]);
+    }
+    const { rows } = await executor.execute(
+      compiled,
+      isSchema(input) ? input.source : undefined,
+    );
+    return rows.length > 0;
+  }
+
+  async function aggregate(
+    input: unknown,
+    op: Aggregate,
+    field?: string,
+  ): Promise<unknown> {
+    if (!AGGREGATES.has(op)) {
+      throw new TypeError(
+        `unknown aggregate ${inspect(op)}; expected count, avg, sum, min or max`,
+      );
+    }
+    if (op !== "count" && field === undefined)
+      throw new TypeError(`Repo.aggregate needs a field for ${op}`);
+    const quote = adapter.syntax.quoteIdentifier;
+    const expression = `${op}(${field === undefined ? "*" : quote(field)})`;
+    let compiled: CompiledQuery;
+    let type: Type<unknown> | undefined;
+    if (isSchema(input)) {
+      if (field !== undefined) type = persistedField(input, field);
+      compiled = CompiledQuery.raw(
+        `SELECT ${expression} AS ${quote("value")} FROM ${quote(input.source)}`,
+        [],
+      );
+    } else {
+      const { sql: text, parameters } = subquery(input, "aggregate");
+      compiled = CompiledQuery.raw(
+        `SELECT ${expression} AS ${quote("value")} FROM (${text}) AS q`,
+        [...parameters],
+      );
+    }
+    const { rows } = await executor.execute(
+      compiled,
+      isSchema(input) ? input.source : undefined,
+    );
+    const value = (rows[0] as Values | undefined)?.value ?? null;
+    if (op === "count") return Number(adapter.load("integer", value));
+    if (value === null || !isSchema(input) || field === undefined) return value;
+    if (op === "avg" && type?.type !== "decimal") {
+      const number = adapter.load("float", value);
+      return typeof number === "string" ? Number(number) : number;
+    }
+    return loadField(input, field, value);
+  }
+
   /** Runs a write without a changeset; constraint violations are thrown. */
   async function runWrite(
     compiled: CompiledQuery,
@@ -1715,6 +1846,16 @@ function bind<DB>(
           changes[name] = (result as { value: unknown }).value;
           break;
         }
+        case "read": {
+          const args =
+            typeof operation.args === "function"
+              ? operation.args(changes)
+              : operation.args;
+          changes[name] = await (
+            tx[operation.fn] as (...args: unknown[]) => Promise<unknown>
+          )(...args);
+          break;
+        }
         case "put":
           changes[name] = operation.value;
           break;
@@ -1810,6 +1951,8 @@ function bind<DB>(
       if (row === null) throw new NoResultsError(text);
       return row;
     }) as Repo["oneOrThrow"],
+    exists: exists as Repo["exists"],
+    aggregate: aggregate as Repo["aggregate"],
     query: query as Repo["query"],
     exec: exec as Repo["exec"],
     insertAll: insertAll as Repo["insertAll"],

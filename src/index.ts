@@ -61,6 +61,7 @@ export {
 } from "./multi.ts";
 export type { PreloadOptions } from "./preloader.ts";
 export {
+  type Aggregate,
   createRepo,
   type DeleteOptions,
   type ExecResult,

@@ -35,11 +35,19 @@ import type {
   InsertAllOptions,
   InsertAllResult,
   InsertOptions,
+  Query,
   Repo,
+  RowOf,
+  SchemaQuery,
   UpdateAll,
   UpdateOptions,
 } from "./repo.ts";
-import type { AnySchema, Inserted } from "./schema.ts";
+import {
+  type AnySchema,
+  type Infer,
+  type Inserted,
+  isSchema,
+} from "./schema.ts";
 
 /** The result of a `run` function (Ecto's `{:ok, value}` / `{:error, value}`). */
 export type RunResult<T, E = unknown> =
@@ -104,6 +112,12 @@ export type Operation =
         repo: Repo,
         changes: Changes,
       ) => Promise<RunResult<unknown>> | RunResult<unknown>;
+    }
+  | {
+      readonly kind: "read";
+      readonly fn: "all" | "one" | "exists";
+      /** The Repo function's arguments, or a function of the changes giving them. */
+      readonly args: readonly unknown[] | ((changes: Changes) => unknown[]);
     }
   | { readonly kind: "put"; readonly value: unknown }
   | { readonly kind: "error"; readonly value: unknown }
@@ -270,6 +284,57 @@ export class Multi<DB = any, C extends Changes = {}> {
   }
 
   /**
+   * Fetches records or rows as `Repo.all` does (Ecto's `Multi.all/4`):
+   * all records of a schema, the records of a schema query, or the rows of
+   * a query. The query may be a function of the changes so far.
+   */
+  all<N extends string, S extends AnySchema>(
+    name: N,
+    schema: S,
+  ): Multi<DB, Add<C, N, Infer<S>[]>>;
+  all<N extends string, S extends AnySchema, Q extends Query>(
+    name: N,
+    schema: S,
+    query: SchemaQuery<S, Q> | ((changes: C) => SchemaQuery<S, Q>),
+  ): Multi<DB, Add<C, N, Infer<S>[]>>;
+  all<N extends string, Q extends Query>(
+    name: N,
+    query: Q | ((changes: C) => Q),
+  ): Multi<DB, Add<C, N, RowOf<Q>[]>>;
+  all(name: string, ...args: [unknown] | [unknown, unknown]): Multi<DB, C> {
+    return this.#add(name, read("all", args));
+  }
+
+  /**
+   * Fetches one record or row, or `null`, as `Repo.one` does (Ecto's
+   * `Multi.one/4`); more than one throws `MultipleResultsError`.
+   */
+  one<N extends string, S extends AnySchema>(
+    name: N,
+    schema: S,
+  ): Multi<DB, Add<C, N, Infer<S> | null>>;
+  one<N extends string, S extends AnySchema, Q extends Query>(
+    name: N,
+    schema: S,
+    query: SchemaQuery<S, Q> | ((changes: C) => SchemaQuery<S, Q>),
+  ): Multi<DB, Add<C, N, Infer<S> | null>>;
+  one<N extends string, Q extends Query>(
+    name: N,
+    query: Q | ((changes: C) => Q),
+  ): Multi<DB, Add<C, N, RowOf<Q> | null>>;
+  one(name: string, ...args: [unknown] | [unknown, unknown]): Multi<DB, C> {
+    return this.#add(name, read("one", args));
+  }
+
+  /** Whether a schema's table or a query has rows, as `Repo.exists` (Ecto's `Multi.exists?/4`). */
+  exists<N extends string>(
+    name: N,
+    queryable: AnySchema | Query | ((changes: C) => Query),
+  ): Multi<DB, Add<C, N, boolean>> {
+    return this.#add(name, read("exists", [queryable]));
+  }
+
+  /**
    * Runs a function in the transaction (Ecto's `Multi.run/3`). It gets the
    * transaction's Repo and the changes so far, and returns `{ ok: true,
    * value }` or `{ ok: false, error }`.
@@ -350,6 +415,22 @@ export class Multi<DB = any, C extends Changes = {}> {
   has(name: string): boolean {
     return this.#names.has(name);
   }
+}
+
+/**
+ * A read operation. A function argument that is not a schema (schemas are
+ * classes) is the query as a function of the changes.
+ */
+function read(
+  fn: "all" | "one" | "exists",
+  args: readonly unknown[],
+): Operation {
+  const last = args.at(-1);
+  if (typeof last !== "function" || isSchema(last))
+    return { kind: "read", fn, args };
+  const query = last as (changes: Changes) => unknown;
+  const first = args.slice(0, -1);
+  return { kind: "read", fn, args: (changes) => [...first, query(changes)] };
 }
 
 /** Sets a changeset's action, rejecting a different one (Ecto's `put_action`). */
