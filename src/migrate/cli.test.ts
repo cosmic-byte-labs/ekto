@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -136,6 +144,34 @@ export default migration({
     assert.match(lines.join("\n"), /== Migrated/);
     await run("rollback");
     assert.match(lines.join("\n"), /== Rolled back/);
+  });
+
+  test("--to-exclusive, a deleted file and a custom folder (mix ecto.migrate, ecto.migrations)", async () => {
+    const folder = join(dir, "migrations");
+    const [file] = await readdir(folder);
+    assert.ok(file);
+    const version = file.slice(0, 14);
+    await run("migrate", "--to-exclusive", version);
+    assert.deepEqual(lines, ["Migrations already up"]);
+    await run("migrate", "--to-exclusive", String(Number(version) + 1));
+    assert.match(lines.join("\n"), /== Migrated/);
+
+    const moved = join(dir, "moved");
+    await rename(folder, moved);
+    await mkdir(folder);
+    try {
+      await run("status");
+      assert.match(lines.join("\n"), /up\s+\d{14}\s+\*\* FILE NOT FOUND \*\*/);
+      await assert.rejects(
+        run("migrate", "--migrations", join(dir, "nowhere")),
+        /could not find migrations directory .*nowhere/,
+      );
+      assert.equal(await run("rollback", "--migrations", moved), 0);
+      assert.match(lines.join("\n"), /== Rolled back/);
+    } finally {
+      await rm(folder, { recursive: true });
+      await rename(moved, folder);
+    }
   });
 
   test("usage and errors", async () => {

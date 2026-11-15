@@ -5,7 +5,7 @@
  */
 
 import { readdir } from "node:fs/promises";
-import { extname, join, resolve } from "node:path";
+import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { type Kysely, sql } from "kysely";
 import type { Adapter } from "../adapter.ts";
@@ -50,6 +50,11 @@ export interface MigrationInfo {
 
 export interface MigrationStatus extends MigrationInfo {
   readonly status: "up" | "down";
+}
+
+function integer(name: string, value: number | undefined) {
+  if (value !== undefined && !Number.isInteger(value))
+    throw new TypeError(`${name} must be an integer version, got ${value}`);
 }
 
 /** Which migrations to run (Ecto.Migrator's strategies). */
@@ -240,6 +245,8 @@ export function createMigrator(options: MigratorOptions): EktoMigrator {
     opts: RunOptions,
   ): Promise<MigrationRun> => {
     positive("step", opts.step);
+    integer("to", opts.to);
+    integer("toExclusive", opts.toExclusive);
     const all = await load();
     await ensureTable();
     const executed = await versions();
@@ -321,30 +328,52 @@ export function createMigrator(options: MigratorOptions): EktoMigrator {
 const MIGRATION_FILE = /\.(m|c)?(j|t)s$/;
 
 /**
- * Loads the migrations in `folder`: every `.ts`, `.js`, `.mts`… file
- * (declaration files excepted) named `<version>_<name>` whose default
- * export is a `migration()`. Other files are ignored, as Ecto does.
+ * Loads the migrations in `folders` and their subfolders, as Ecto's
+ * `migrations_paths`: every `.ts`, `.js`, `.mts`… file (declaration files
+ * excepted) named `<version>_<name>` whose default export is a
+ * `migration()`. Other files are ignored, as Ecto does.
  */
-export function fileMigrations(folder: string): () => Promise<Migrations> {
+export function fileMigrations(
+  folders: string | readonly string[],
+): () => Promise<Migrations> {
   return async () => {
-    const dir = resolve(folder);
-    const files = (await readdir(dir))
-      .filter(
-        (f) =>
-          MIGRATION_FILE.test(f) &&
-          !/\.d\.(m|c)?ts$/.test(f) &&
-          KEY.test(f.slice(0, -extname(f).length)),
-      )
-      .sort();
+    const files: string[] = [];
+    for (const folder of typeof folders === "string" ? [folders] : folders) {
+      const dir = resolve(folder);
+      let found: string[];
+      try {
+        found = await readdir(dir, { recursive: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT")
+          throw new MigrationError(
+            `could not find migrations directory ${folder}`,
+          );
+        throw error;
+      }
+      for (const file of found) {
+        const name = basename(file);
+        if (
+          MIGRATION_FILE.test(name) &&
+          !/\.d\.(m|c)?ts$/.test(name) &&
+          KEY.test(name.slice(0, -extname(name).length))
+        )
+          files.push(join(dir, file));
+      }
+    }
     const migrations: Record<string, Migration> = {};
-    for (const file of files) {
-      const module = await import(pathToFileURL(join(dir, file)).href);
+    for (const file of files.sort()) {
+      const key = basename(file, extname(file));
+      if (key in migrations)
+        throw new MigrationError(
+          `migrations can't be executed, migration ${key} is duplicated`,
+        );
+      const module = await import(pathToFileURL(file).href);
       const migration = module.default;
       if (!isMigration(migration))
         throw new TypeError(
-          `${file} must export a migration() as its default export`,
+          `${basename(file)} must export a migration() as its default export`,
         );
-      migrations[file.slice(0, -extname(file).length)] = migration;
+      migrations[key] = migration;
     }
     return migrations;
   };

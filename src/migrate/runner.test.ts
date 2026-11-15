@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -242,10 +242,91 @@ function suite(adapter: Adapter, connect: () => AnyKysely) {
     await sql.raw(`DELETE FROM "${source}"`).execute(db);
   });
 
+  test("steps and versions stop at the available migrations", async () => {
+    const m = migrator();
+    assert.deepEqual(
+      versions(await m.migrate({ step: 10 })),
+      [20260101000000, 20260102000000, 20260103000000],
+    );
+    assert.deepEqual(
+      versions(await m.rollback({ step: 10 })),
+      [20260103000000, 20260102000000, 20260101000000],
+    );
+    assert.deepEqual(
+      versions(await m.migrate({ to: 20990101000000 })),
+      [20260101000000, 20260102000000, 20260103000000],
+    );
+    assert.deepEqual(
+      versions(await m.rollback({ to: 1 })),
+      [20260103000000, 20260102000000, 20260101000000],
+    );
+    assert.deepEqual(
+      versions(await m.migrate({ toExclusive: 20260102000000 })),
+      [20260101000000],
+    );
+    assert.deepEqual(
+      versions(await m.rollback({ all: true })),
+      [20260101000000],
+    );
+  });
+
+  test("a failure midway keeps the migrations before it and skips the rest", async () => {
+    const ran: string[] = [];
+    const step = (name: string, fail = false) =>
+      migration({
+        up(m) {
+          m.execute(async () => {
+            ran.push(name);
+            if (fail) throw new Error("boom");
+          });
+        },
+        down(m) {
+          m.execute(async () => {});
+        },
+      });
+    const m = migrator({
+      "1_first": step("first"),
+      "2_second": step("second", true),
+      "3_third": step("third"),
+    });
+    await assert.rejects(m.migrate(), /migration 2_second failed: boom/);
+    assert.deepEqual(ran, ["first", "second"]);
+    assert.deepEqual(
+      (await m.status()).map((s) => s.status),
+      ["up", "down", "down"],
+    );
+    assert.deepEqual(versions(await m.rollback({ all: true })), [1]);
+  });
+
+  test("loads migrations from a function", async () => {
+    const m = createMigrator({
+      db,
+      adapter,
+      migrations: async () => ({
+        "1_loaded": migration({
+          change(m) {
+            m.execute("SELECT 1", "SELECT 1");
+          },
+        }),
+      }),
+      migrationSource: source,
+    });
+    assert.deepEqual(await m.migrate(), [{ version: 1, name: "loaded" }]);
+    assert.deepEqual(await m.rollback(), [{ version: 1, name: "loaded" }]);
+  });
+
   test("checks migrations and options", async () => {
     await assert.rejects(
       migrator().migrate({ step: 0 }),
       /step must be a positive integer/,
+    );
+    await assert.rejects(
+      migrator().migrate({ to: "20260101000000" as never }),
+      /to must be an integer version, got 20260101000000/,
+    );
+    await assert.rejects(
+      migrator().rollback({ toExclusive: 1.5 }),
+      /toExclusive must be an integer version/,
     );
     await assert.rejects(
       migrator({ x: {} as never }).migrate(),
@@ -272,6 +353,61 @@ describe("migrator on SQLite", () => {
     const database = new Database(":memory:");
     database.pragma("foreign_keys = ON");
     return new KyselyClass({ dialect: new SqliteDialect({ database }) });
+  });
+});
+
+describe("lock for migrations", () => {
+  const db = new KyselyClass({
+    dialect: new SqliteDialect({ database: new Database(":memory:") }),
+  });
+  const locks: string[] = [];
+  const adapter: Adapter = {
+    ...sqlite(),
+    async lockForMigrations(_db, source, fn) {
+      locks.push(source);
+      return fn();
+    },
+  };
+  const noop = (options: { disableMigrationLock?: boolean } = {}) =>
+    migration({
+      ...options,
+      change(m) {
+        m.execute("SELECT 1", "SELECT 1");
+      },
+    });
+  after(() => db.destroy());
+
+  test("is taken for each migration going up and down", async () => {
+    locks.length = 0;
+    const m = createMigrator({
+      db,
+      adapter,
+      migrations: { "1_a": noop(), "2_b": noop() },
+    });
+    await m.migrate();
+    assert.deepEqual(locks, ["schema_migrations", "schema_migrations"]);
+    await m.rollback({ all: true });
+    assert.equal(locks.length, 4);
+  });
+
+  test("is not taken with disableMigrationLock or migrationLock: false", async () => {
+    locks.length = 0;
+    const m = createMigrator({
+      db,
+      adapter,
+      migrations: { "1_a": noop({ disableMigrationLock: true }) },
+    });
+    await m.migrate();
+    await m.rollback();
+    const unlocked = createMigrator({
+      db,
+      adapter,
+      migrations: { "1_a": noop() },
+      migrationLock: false,
+    });
+    await unlocked.migrate();
+    await unlocked.rollback();
+    assert.deepEqual(locks, []);
   });
 });
 
@@ -337,6 +473,54 @@ describe("fileMigrations", () => {
     await assert.rejects(
       fileMigrations(dir)(),
       /003_c.ts must export a migration\(\) as its default export/,
+    );
+  });
+
+  test("picks up subfolders and several folders, in version order", async () => {
+    const dsl = pathToFileURL(join(import.meta.dirname, "dsl.ts")).href;
+    const body = `import { migration } from ${JSON.stringify(dsl)};\nexport default migration({ change(m) { m.execute("SELECT 1", "SELECT 2"); } });\n`;
+    const a = join(dir, "paths", "a");
+    const b = join(dir, "paths", "b");
+    await mkdir(join(a, "nested"), { recursive: true });
+    await mkdir(b, { recursive: true });
+    await writeFile(join(a, "10_ten.ts"), body);
+    await writeFile(join(a, "nested", "12_twelve.ts"), body);
+    await writeFile(join(b, "11_eleven.ts"), body);
+    const db = new KyselyClass({
+      dialect: new SqliteDialect({ database: new Database(":memory:") }),
+    });
+    try {
+      const m = createMigrator({
+        db,
+        adapter: sqlite(),
+        migrations: fileMigrations([a, b]),
+      });
+      assert.deepEqual(versions(await m.migrate()), [10, 11, 12]);
+      // Without b, its executed migration shows as missing (Ecto's status).
+      assert.deepEqual(
+        await createMigrator({
+          db,
+          adapter: sqlite(),
+          migrations: fileMigrations(a),
+        }).status(),
+        [
+          { status: "up", version: 10, name: "ten" },
+          { status: "up", version: 11, name: FILE_NOT_FOUND },
+          { status: "up", version: 12, name: "twelve" },
+        ],
+      );
+    } finally {
+      await db.destroy();
+    }
+
+    await writeFile(join(b, "10_ten.ts"), body);
+    await assert.rejects(
+      fileMigrations([a, b])(),
+      /migration 10_ten is duplicated/,
+    );
+    await assert.rejects(
+      fileMigrations(join(dir, "missing"))(),
+      /could not find migrations directory .*missing/,
     );
   });
 });
