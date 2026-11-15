@@ -1,9 +1,15 @@
 // Public entry point of ekto.
 
-export type { Adapter, QueryEvent, QueryResult } from "./adapter.ts";
+export type {
+  Adapter,
+  ConstraintViolation,
+  QueryEvent,
+  QueryResult,
+} from "./adapter.ts";
 export * from "./changeset.ts";
 export {
   ChangeError,
+  ConstraintError,
   MultiplePrimaryKeyError,
   MultipleResultsError,
   NoPrimaryKeyFieldError,

@@ -17,18 +17,27 @@
 
 import { inspect } from "node:util";
 import type { Kysely } from "kysely";
-import { type Adapter, Executor, type QueryEvent } from "./adapter.ts";
+import {
+  type Adapter,
+  type ConstraintViolation,
+  Executor,
+  type QueryEvent,
+  type QueryResult,
+} from "./adapter.ts";
 import {
   type Action,
   type AnyChangeset,
   addError,
   Changeset,
+  type ChangesetError,
+  type Constraint,
   change,
   InvalidChangesetError,
   isChangeset,
 } from "./changeset.ts";
 import {
   ChangeError,
+  ConstraintError,
   MultiplePrimaryKeyError,
   MultipleResultsError,
   NoPrimaryKeyFieldError,
@@ -403,7 +412,17 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
     options: StaleOptions<object>,
     source: string,
   ): Promise<ApplyResult> {
-    const result = await executor.execute(query, source);
+    let result: QueryResult;
+    try {
+      result = await executor.execute(query, source);
+    } catch (error) {
+      const violations = adapter.toConstraints(error);
+      if (violations.length === 0) throw error;
+      return {
+        ok: false,
+        changeset: constraintsToErrors(changeset, action, violations),
+      };
+    }
     const count =
       returning.length > 0
         ? result.rows.length
@@ -423,6 +442,35 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
       };
     }
     throw new StaleEntryError(action, changeset);
+  }
+
+  /**
+   * Turns violated constraints into errors, using the constraints the
+   * changeset declares; throws `ConstraintError` for undeclared ones (Ecto's
+   * `constraints_to_errors`).
+   */
+  function constraintsToErrors(
+    changeset: AnyChangeset,
+    action: Action,
+    violations: readonly ConstraintViolation[],
+  ): AnyChangeset {
+    const errors: ChangesetError[] = violations.map(({ type, constraint }) => {
+      const declared = changeset.constraints.find(
+        (c) => c.type === type && constraintMatches(c, constraint),
+      );
+      if (!declared)
+        throw new ConstraintError(action, type, constraint, changeset);
+      return {
+        field: declared.field,
+        message: declared.errorMessage,
+        meta: { constraint: declared.errorType, constraintName: constraint },
+      };
+    });
+    return new Changeset({
+      ...changeset,
+      errors: [...errors, ...changeset.errors],
+      valid: false,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -761,6 +809,14 @@ export function createRepo<DB>(config: RepoConfig<DB>): Repo<DB> {
       load(schema, row, loader)) as Repo["load"],
   };
   return Object.freeze(repo);
+}
+
+function constraintMatches(declared: Constraint, name: string): boolean {
+  const { constraint, match } = declared;
+  if (constraint instanceof RegExp) return constraint.test(name);
+  if (match === "suffix") return name.endsWith(constraint);
+  if (match === "prefix") return name.startsWith(constraint);
+  return name === constraint;
 }
 
 function pick(

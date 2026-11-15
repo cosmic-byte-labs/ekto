@@ -7,16 +7,20 @@ import {
   Changeset,
   cast,
   change,
+  checkConstraint,
+  foreignKeyConstraint,
   InvalidChangesetError,
   optimisticLock,
   pipe,
   prepareChanges,
   putChange,
   schemaless,
+  uniqueConstraint,
   validateRequired,
 } from "./changeset.ts";
 import {
   ChangeError,
+  ConstraintError,
   MultipleResultsError,
   NoPrimaryKeyValueError,
   NoResultsError,
@@ -47,8 +51,15 @@ const User = schema("repo_users", {
   ...t.timestamps(),
 });
 
-// As an Ecto migration would create it.
+const Post = schema("repo_posts", {
+  id: t.id(),
+  title: t.string(),
+  user_id: t.integer(),
+});
+
+// As Ecto migrations would create them.
 const DDL = `
+  DROP TABLE IF EXISTS repo_posts;
   DROP TABLE IF EXISTS repo_users;
   CREATE TABLE repo_users (
     id bigserial PRIMARY KEY,
@@ -65,11 +76,18 @@ const DDL = `
     lock_version integer NOT NULL DEFAULT 1,
     visits integer NOT NULL DEFAULT 0,
     inserted_at timestamp(0) NOT NULL,
-    updated_at timestamp(0) NOT NULL
+    updated_at timestamp(0) NOT NULL,
+    CONSTRAINT age_must_be_positive CHECK (age >= 0)
+  );
+  CREATE UNIQUE INDEX repo_users_email_index ON repo_users (email);
+  CREATE TABLE repo_posts (
+    id bigserial PRIMARY KEY,
+    title varchar(255) NOT NULL,
+    user_id bigint NOT NULL REFERENCES repo_users (id)
   );
 `;
 
-type DB = KyselyDB<[typeof User]>;
+type DB = KyselyDB<[typeof User, typeof Post]>;
 
 const userChangeset = (
   data: Infer<typeof User> | ReturnType<typeof User.new>,
@@ -116,12 +134,12 @@ describe("Repo on Postgres", { skip: skipWithoutPg }, () => {
   });
 
   after(async () => {
-    await raw("DROP TABLE IF EXISTS repo_users");
+    await raw("DROP TABLE IF EXISTS repo_posts, repo_users");
     await close();
   });
 
   beforeEach(async () => {
-    await raw("TRUNCATE repo_users RESTART IDENTITY");
+    await raw("TRUNCATE repo_posts, repo_users RESTART IDENTITY");
     queries = [];
   });
 
@@ -353,6 +371,96 @@ describe("Repo on Postgres", { skip: skipWithoutPg }, () => {
       const result = await Repo.delete(user, { staleErrorField: "id" });
       assert.ok(!result.ok);
       assert.equal(result.changeset.action, "delete");
+    });
+  });
+
+  describe("constraints", () => {
+    test("unique violations become errors when declared", async () => {
+      await insertUser();
+      const result = await Repo.insert(
+        uniqueConstraint(
+          userChangeset(User.new(), { email: "ann@example.com" }),
+          "email",
+        ),
+      );
+      assert.ok(!result.ok);
+      assert.equal(result.changeset.valid, false);
+      assert.deepEqual(result.changeset.errors, [
+        {
+          field: "email",
+          message: "has already been taken",
+          meta: {
+            constraint: "unique",
+            constraintName: "repo_users_email_index",
+          },
+        },
+      ]);
+    });
+
+    test("undeclared violations throw ConstraintError", async () => {
+      await insertUser();
+      await assert.rejects(
+        Repo.insert(userChangeset(User.new(), { email: "ann@example.com" })),
+        (e: unknown) =>
+          e instanceof ConstraintError &&
+          e.type === "unique" &&
+          e.constraint === "repo_users_email_index" &&
+          e.message.includes("The changeset has not defined any constraint."),
+      );
+    });
+
+    test("check constraints, matched by suffix, on update", async () => {
+      const user = await insertUser();
+      const result = await Repo.update(
+        checkConstraint(change(user, { age: -1 }), "age", {
+          name: "be_positive",
+          match: "suffix",
+        }),
+      );
+      assert.ok(!result.ok);
+      assert.deepEqual(result.changeset.errors[0]?.meta, {
+        constraint: "check",
+        constraintName: "age_must_be_positive",
+      });
+    });
+
+    test("foreign key constraints, with the conventional name", async () => {
+      const result = await Repo.insert(
+        foreignKeyConstraint(
+          change(Post.new({ title: "Hi", user_id: 42 })),
+          "user_id",
+        ),
+      );
+      assert.ok(!result.ok);
+      assert.deepEqual(result.changeset.errors, [
+        {
+          field: "user_id",
+          message: "does not exist",
+          meta: {
+            constraint: "foreign",
+            constraintName: "repo_posts_user_id_fkey",
+          },
+        },
+      ]);
+    });
+
+    test("rolls back prepare functions' writes", async () => {
+      await insertUser();
+      const result = await Repo.insert(
+        pipe(
+          userChangeset(User.new(), { email: "ann@example.com" }),
+          uniqueConstraint("email"),
+          prepareChanges(async (cs) => {
+            await cs.repo?.insert(User.new({ email: "side@effect.com" }));
+            return cs;
+          }),
+        ),
+      );
+      assert.ok(!result.ok);
+      assert.equal(
+        (await raw("SELECT count(*)::int AS n FROM repo_users"))[0]?.n,
+        1,
+      );
     });
   });
 

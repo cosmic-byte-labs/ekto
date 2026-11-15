@@ -10,6 +10,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { CompiledQuery, type Kysely } from "kysely";
+import type { ConstraintType } from "./changeset.ts";
 import type { Queryable, SqlSyntax } from "./sql.ts";
 import type { PrimitiveType } from "./type.ts";
 
@@ -28,6 +29,18 @@ export interface Adapter {
    * dumpers). Never called with `null`.
    */
   dump(type: PrimitiveType, value: unknown): unknown;
+  /**
+   * The constraints a database error reports as violated, or none when it
+   * is not a constraint violation (Ecto's `to_constraints/2`).
+   */
+  toConstraints(error: unknown): readonly ConstraintViolation[];
+}
+
+/** A constraint the database reported as violated. */
+export interface ConstraintViolation {
+  readonly type: ConstraintType;
+  /** The constraint name. */
+  readonly constraint: string;
 }
 
 /** The rows a query returned and the number of rows it affected. */

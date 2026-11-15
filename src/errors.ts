@@ -4,7 +4,8 @@
  * constraint violations the changeset declares) are returned, not thrown.
  */
 
-import type { Action, AnyChangeset } from "./changeset.ts";
+import { inspect } from "node:util";
+import type { Action, AnyChangeset, ConstraintType } from "./changeset.ts";
 
 /**
  * An update or delete matched no row: the record was deleted, or a filter
@@ -95,4 +96,53 @@ export class MultiplePrimaryKeyError extends Error {
     this.source = source;
     this.count = count;
   }
+}
+
+/**
+ * The database reported a constraint violation the changeset did not
+ * declare (Ecto.ConstraintError). Declare it, e.g. with `uniqueConstraint`,
+ * to get a changeset error instead.
+ */
+export class ConstraintError extends Error {
+  readonly type: ConstraintType;
+  readonly constraint: string;
+
+  constructor(
+    action: Action,
+    type: ConstraintType,
+    constraint: string,
+    changeset: AnyChangeset,
+  ) {
+    const fn = constraintFunction(type);
+    const declared =
+      changeset.constraints.length === 0
+        ? "The changeset has not defined any constraint."
+        : `The changeset defined the following constraints:\n\n${changeset.constraints
+            .map(
+              (c) =>
+                `    * ${inspect(c.constraint)} (${constraintFunction(c.type)})`,
+            )
+            .join("\n")}`;
+    super(
+      `constraint error when attempting to ${action} record:\n\n` +
+        `    * ${inspect(constraint)} (${fn})\n\n` +
+        "If you would like to stop this constraint violation from raising an\n" +
+        "exception and instead add it as an error to your changeset, please\n" +
+        `call \`${fn}\` on your changeset with the constraint name as the\n` +
+        "`name` option.\n\n" +
+        declared,
+    );
+    this.name = "ConstraintError";
+    this.type = type;
+    this.constraint = constraint;
+  }
+}
+
+function constraintFunction(type: ConstraintType): string {
+  return {
+    unique: "uniqueConstraint",
+    foreign_key: "foreignKeyConstraint",
+    check: "checkConstraint",
+    exclusion: "exclusionConstraint",
+  }[type];
 }

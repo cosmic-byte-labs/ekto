@@ -2,7 +2,8 @@
  * PostgreSQL support (`ekto/postgres`).
  */
 
-import type { Adapter } from "../adapter.ts";
+import type { Adapter, ConstraintViolation } from "../adapter.ts";
+import type { ConstraintType } from "../changeset.ts";
 import type { DriverValue, KyselyTables } from "../kysely.ts";
 import type { AnySchema } from "../schema.ts";
 import { quoteIdentifierAnsi, type SqlSyntax } from "../sql.ts";
@@ -140,6 +141,35 @@ function dumpValue(type: PrimitiveType, value: unknown): unknown {
   }
 }
 
+// SQLSTATE codes of constraint violations (Postgrex's error code names).
+const CONSTRAINT_ERRORS: Readonly<Record<string, ConstraintType>> = {
+  "23505": "unique", // unique_violation
+  "23503": "foreign_key", // foreign_key_violation
+  "23001": "foreign_key", // restrict_violation
+  "23P01": "exclusion", // exclusion_violation
+  "23514": "check", // check_violation
+};
+
+/** The violated constraint of a node-postgres `DatabaseError` (Ecto's `to_constraints/2`). */
+function toConstraints(error: unknown): readonly ConstraintViolation[] {
+  if (typeof error !== "object" || error === null) return [];
+  const { code, constraint, message } = error as {
+    code?: unknown;
+    constraint?: unknown;
+    message?: unknown;
+  };
+  const type = typeof code === "string" ? CONSTRAINT_ERRORS[code] : undefined;
+  if (type === undefined) return [];
+  if (typeof constraint === "string") return [{ type, constraint }];
+  // Without the constraint field, take the name from the message, as Ecto
+  // does for old servers.
+  const quoted =
+    type === "unique" && typeof message === "string"
+      ? /unique constraint "(.+)"/.exec(message)?.[1]
+      : undefined;
+  return quoted === undefined ? [] : [{ type, constraint: quoted }];
+}
+
 /**
  * The PostgreSQL adapter, for Kysely's `PostgresDialect` with node-postgres.
  *
@@ -164,5 +194,6 @@ export function postgres(): Adapter {
     syntax: postgresSyntax,
     load: loadValue,
     dump: dumpValue,
+    toConstraints,
   });
 }
