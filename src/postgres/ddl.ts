@@ -250,6 +250,7 @@ function createIndex(
 ): string {
   return (
     `CREATE ${index.unique ? "UNIQUE " : ""}INDEX ` +
+    (index.concurrently ? "CONCURRENTLY " : "") +
     (command === "createIfNotExists" ? "IF NOT EXISTS " : "") +
     `${quote(index.name)} ON ${quote(index.table)}` +
     (index.using === undefined ? "" : ` USING ${index.using}`) +
@@ -307,7 +308,10 @@ export function postgresDdl(command: DdlCommand): readonly string[] {
         case "table":
           return [`DROP TABLE ${ifExists}${quote(object.name)}${mode}`];
         case "index":
-          return [`DROP INDEX ${ifExists}${quote(object.name)}${mode}`];
+          return [
+            `DROP INDEX ${object.concurrently ? "CONCURRENTLY " : ""}` +
+              `${ifExists}${quote(object.name)}${mode}`,
+          ];
         case "constraint":
           return [
             `ALTER TABLE ${quote(object.table)} DROP CONSTRAINT ${ifExists}${quote(object.name)}${mode}`,

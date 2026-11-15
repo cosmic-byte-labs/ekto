@@ -15,8 +15,8 @@ change.
 
 | Operation                                                                                       | Risk                                                 | Safe approach                                                                          |
 | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| [Adding an index](#adding-an-index)                                                             | Blocks writes                                        | Create it `CONCURRENTLY` and disable transactions                                      |
-| [Dropping an index](#dropping-an-index)                                                         | Blocks reads and writes                              | Drop it `CONCURRENTLY` and disable transactions                                        |
+| [Adding an index](#adding-an-index)                                                             | Blocks writes                                        | Use `concurrently: true` and disable transactions                                      |
+| [Dropping an index](#dropping-an-index)                                                         | Blocks reads and writes                              | Use `concurrently: true` and disable transactions                                      |
 | [Adding a reference or foreign key](#adding-a-reference-or-foreign-key)                         | Blocks writes on both tables                         | Use `validate: false`, then validate separately                                        |
 | [Adding a column with a default value](#adding-a-column-with-a-default-value)                   | Volatile or expression defaults rewrite the table    | Constant defaults are fast on Postgres 11+; otherwise add the column, then the default |
 | [Changing a column's default value](#changing-a-columns-default-value)                          | `modify` can force an unnecessary type change        | Use raw SQL to change only the default                                                 |
@@ -60,8 +60,7 @@ export default migration({
 
 ### Good
 
-With Postgres, instead create the index concurrently which does not block writes. ekto's `index`
-has no `concurrently` option, so create it with SQL, with its rollback.
+With Postgres, instead create the index concurrently which does not block writes.
 
 Disable the DDL transaction and the migration lock for the migration. By default, ekto with
 Postgres will run migrations with a DDL transaction and a migration lock which also uses another
@@ -75,10 +74,7 @@ export default migration({
   disableDdlTransaction: true,
   disableMigrationLock: true,
   change(m) {
-    m.execute(
-      'CREATE INDEX CONCURRENTLY "posts_slug_index" ON "posts" ("slug")',
-      'DROP INDEX CONCURRENTLY "posts_slug_index"',
-    );
+    m.create(index("posts", ["slug"], { concurrently: true }));
   },
 });
 ```
@@ -117,10 +113,7 @@ export default migration({
   disableDdlTransaction: true,
   disableMigrationLock: true,
   change(m) {
-    m.execute(
-      'DROP INDEX CONCURRENTLY "posts_slug_index"',
-      'CREATE INDEX CONCURRENTLY "posts_slug_index" ON "posts" ("slug")',
-    );
+    m.drop(index("posts", ["slug"], { concurrently: true }));
   },
 });
 ```

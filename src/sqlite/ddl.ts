@@ -176,6 +176,8 @@ function createIndex(
     throw new TypeError("using is not supported with SQLite3");
   if (index.nullsDistinct !== undefined)
     throw new TypeError("nullsDistinct is not supported with SQLite3");
+  if (index.concurrently)
+    throw new TypeError("concurrently is not supported with SQLite3");
   return (
     `CREATE ${index.unique ? "UNIQUE " : ""}INDEX ` +
     (command === "createIfNotExists" ? "IF NOT EXISTS " : "") +
@@ -249,6 +251,8 @@ export function sqliteDdl(command: DdlCommand): readonly string[] {
         case "table":
           return [`DROP TABLE ${ifExists}${quote(object.name)}${mode}`];
         case "index":
+          if (object.concurrently)
+            throw new TypeError("concurrently is not supported with SQLite3");
           return [`DROP INDEX ${ifExists}${quote(object.name)}${mode}`];
         case "constraint":
           if (command.command === "dropIfExists")

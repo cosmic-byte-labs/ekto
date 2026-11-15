@@ -205,12 +205,20 @@ describe("PostgreSQL DDL", () => {
             nullsDistinct: false,
           }),
         );
+        m.createIfNotExists(
+          uniqueIndex("posts", ["slug"], { concurrently: true }),
+        );
+        m.drop(index("posts", ["slug"], { concurrently: true }));
+        m.dropIfExists(index("posts", ["slug"], { concurrently: true }));
       }),
       [
         'CREATE INDEX "posts_category_id_permalink_index" ON "posts" ("category_id", "permalink")',
         'CREATE UNIQUE INDEX "posts$main" ON "posts" (lower(permalink))',
         'CREATE INDEX IF NOT EXISTS "posts_permalink_index" ON "posts" ("permalink") WHERE public IS TRUE',
         'CREATE INDEX "posts_data_index" ON "posts" USING gin ("data") INCLUDE ("id") NULLS NOT DISTINCT',
+        'CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "posts_slug_index" ON "posts" ("slug")',
+        'DROP INDEX CONCURRENTLY "posts_slug_index"',
+        'DROP INDEX CONCURRENTLY IF EXISTS "posts_slug_index"',
       ],
     );
   });

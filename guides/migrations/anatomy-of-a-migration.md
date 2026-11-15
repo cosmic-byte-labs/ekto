@@ -513,7 +513,7 @@ FROM pg_index WHERE NOT indisvalid;
 To clean up, drop the invalid index and retry:
 
 ```ts
-import { migration } from "ekto/migrate";
+import { index, migration } from "ekto/migrate";
 
 export default migration({
   disableDdlTransaction: true,
@@ -521,16 +521,10 @@ export default migration({
   change(m) {
     // Drop any invalid index from a previous failed attempt
     m.execute('DROP INDEX CONCURRENTLY IF EXISTS "posts_slug_index"', "");
-    m.execute(
-      'CREATE INDEX CONCURRENTLY "posts_slug_index" ON "posts" ("slug")',
-      'DROP INDEX CONCURRENTLY "posts_slug_index"',
-    );
+    m.create(index("posts", ["slug"], { concurrently: true }));
   },
 });
 ```
-
-ekto's `index` has no `concurrently` option, so the index is created with SQL; see
-[Safe migrations](safe-migrations.md#adding-an-index).
 
 > [!WARNING]
 > Always check for invalid indexes after a failed concurrent migration. They won't go away on

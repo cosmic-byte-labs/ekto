@@ -84,6 +84,7 @@ export interface Index {
   readonly using: string | undefined;
   readonly include: readonly string[];
   readonly nullsDistinct: boolean | undefined;
+  readonly concurrently: boolean;
 }
 
 export interface IndexOptions {
@@ -98,6 +99,12 @@ export interface IndexOptions {
   readonly include?: readonly string[];
   /** PostgreSQL 15+ `NULLS [NOT] DISTINCT`. */
   readonly nullsDistinct?: boolean;
+  /**
+   * Create or drop the index without locking out writes (PostgreSQL
+   * `CONCURRENTLY`). It cannot run in a transaction, so the migration needs
+   * `disableDdlTransaction` and `disableMigrationLock`.
+   */
+  readonly concurrently?: boolean;
 }
 
 // Ecto's `column_name/1`: non-word characters become "_", trailing ones go.
@@ -122,6 +129,7 @@ export function index(
     using: options.using,
     include: Object.freeze([...(options.include ?? [])]),
     nullsDistinct: options.nullsDistinct,
+    concurrently: options.concurrently ?? false,
   });
 }
 

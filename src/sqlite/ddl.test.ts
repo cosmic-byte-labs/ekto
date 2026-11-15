@@ -121,6 +121,14 @@ describe("SQLite DDL", () => {
         /include is not supported/,
       ],
       [
+        (m) => m.create(index("t", "a", { concurrently: true })),
+        /concurrently is not supported/,
+      ],
+      [
+        (m) => m.drop(index("t", "a", { concurrently: true })),
+        /concurrently is not supported/,
+      ],
+      [
         (m) => m.create(constraint("t", "c", { exclude: "x" })),
         /exclusion constraints/,
       ],
