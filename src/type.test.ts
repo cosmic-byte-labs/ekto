@@ -7,6 +7,7 @@ import {
   CastError,
   castValue,
   castValueOrThrow,
+  compareDecimal,
   date,
   decimal,
   deepEqual,
@@ -317,5 +318,25 @@ describe("deepEqual", () => {
     assert.ok(deepEqual({ a: [1, new Date(5)] }, { a: [1, new Date(5)] }));
     assert.ok(!deepEqual({ a: 1 }, { a: 1, b: undefined }));
     assert.ok(!deepEqual([1], { 0: 1 }));
+  });
+});
+
+describe("compareDecimal", () => {
+  test("compares exactly, whatever the notation", () => {
+    assert.equal(compareDecimal("1.50", "1.5"), 0);
+    assert.equal(compareDecimal("0.00", "-0"), 0);
+    assert.equal(compareDecimal("2", "10"), -1);
+    assert.equal(compareDecimal("-2", "-10"), 1);
+    assert.equal(compareDecimal("0.1", "0"), 1);
+    assert.equal(compareDecimal("-0.1", "0"), -1);
+    assert.equal(compareDecimal("1e3", "999.9999"), 1);
+    assert.equal(
+      compareDecimal("12345678901234567890.1", "12345678901234567890.01"),
+      1,
+    );
+  });
+
+  test("throws on invalid decimals", () => {
+    assert.throws(() => compareDecimal("x", "1"), TypeError);
   });
 });

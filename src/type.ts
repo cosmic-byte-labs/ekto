@@ -287,7 +287,7 @@ export const decimal: Type<string> = {
   cast: sameDecimal,
   load: sameDecimal,
   dump: sameDecimal,
-  equal: (a, b) => normalizeDecimal(a) === normalizeDecimal(b),
+  equal: (a, b) => compareDecimal(a, b) === 0,
 };
 
 function sameDecimal(value: unknown): CastResult<string> {
@@ -299,21 +299,52 @@ function sameDecimal(value: unknown): CastResult<string> {
   return error();
 }
 
-/**
- * A canonical form of a decimal string, so `"1.50"`, `"1.5"` and `"15e-1"`
- * compare equal (Ecto compares decimals with `Decimal.equal?/2`).
- */
-function normalizeDecimal(value: string): string {
+interface ParsedDecimal {
+  readonly negative: boolean;
+  /** Significant digits without leading or trailing zeros; "" for zero. */
+  readonly digits: string;
+  /** Power of ten the digits are multiplied by. */
+  readonly exponent: number;
+}
+
+function parseDecimal(value: string): ParsedDecimal {
   const match = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(value);
-  if (!match) return value;
+  if (!match || !DECIMAL.test(value)) {
+    throw new TypeError(`invalid decimal: ${JSON.stringify(value)}`);
+  }
   const [, sign = "", int = "", frac = "", exp = "0"] = match;
-  let digits = (int + frac).replace(/^0+/, "");
-  if (digits === "") return "0";
-  let exponent = Number(exp) - frac.length;
-  const trailing = /0+$/.exec(digits)?.[0].length ?? 0;
-  digits = digits.slice(0, digits.length - trailing);
-  exponent += trailing;
-  return `${sign === "-" ? "-" : ""}${digits}e${exponent}`;
+  const all = (int + frac).replace(/^0+/, "");
+  const trimmed = all.replace(/0+$/, "");
+  return {
+    negative: sign === "-" && trimmed !== "",
+    digits: trimmed,
+    exponent: Number(exp) - frac.length + (all.length - trimmed.length),
+  };
+}
+
+/**
+ * Compares two decimal strings exactly: -1, 0 or 1 (Ecto's
+ * `Decimal.compare/2`). `"1.50"`, `"1.5"` and `"15e-1"` are equal.
+ */
+export function compareDecimal(a: string, b: string): -1 | 0 | 1 {
+  const x = parseDecimal(a);
+  const y = parseDecimal(b);
+  if (x.negative !== y.negative) return x.negative ? -1 : 1;
+  const sign = x.negative ? -1 : 1;
+  if (x.digits === "" || y.digits === "") {
+    if (x.digits === y.digits) return 0;
+    return x.digits === "" ? (-sign as -1 | 1) : (sign as -1 | 1);
+  }
+  // Compare the position of the leading digit, then the digits themselves.
+  const xMagnitude = x.digits.length + x.exponent;
+  const yMagnitude = y.digits.length + y.exponent;
+  if (xMagnitude !== yMagnitude)
+    return (xMagnitude > yMagnitude ? sign : -sign) as -1 | 1;
+  const width = Math.max(x.digits.length, y.digits.length);
+  const xs = x.digits.padEnd(width, "0");
+  const ys = y.digits.padEnd(width, "0");
+  if (xs === ys) return 0;
+  return (xs > ys ? sign : -sign) as -1 | 1;
 }
 
 function sameBoolean(value: unknown): CastResult<boolean> {
@@ -628,8 +659,13 @@ export const utcDatetimeMsec: Type<Date> = {
 
 // Parameterized types ------------------------------------------------------------
 
+/** The type returned by `array`; `of` is the element type. */
+export interface ArrayType<T> extends Type<T[]> {
+  readonly of: Type<T>;
+}
+
 /** A list of values of one type (Ecto's `{:array, type}`). */
-export function array<T>(of: Type<T>): Type<T[]> {
+export function array<T>(of: Type<T>): ArrayType<T> {
   const each =
     (fn: (value: unknown) => CastResult<unknown>) =>
     (value: unknown): CastResult<T[]> => {
@@ -646,6 +682,7 @@ export function array<T>(of: Type<T>): Type<T[]> {
     };
   return {
     type: ["array", of.type],
+    of,
     cast: each((v) => of.cast(v)),
     load: each((v) => of.load(v)),
     dump: each((v) => of.dump(v)),

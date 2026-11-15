@@ -337,12 +337,13 @@ export interface Schema<F extends Fields = Fields> {
 // biome-ignore lint/suspicious/noExplicitAny: a schema with any fields
 export type AnySchema = Schema<any>;
 
-const SOURCE = /^[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?$/;
+const SOURCE = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 
 /**
  * Defines a schema for a table (Ecto's `schema/2`).
  *
- * @param source the table name, optionally `schema.table`
+ * @param source the table name (Ecto keeps a schema prefix separately; ekto
+ *   does not support prefixes yet)
  * @param fields field definitions built with `t`
  */
 export function schema<const F extends Fields>(

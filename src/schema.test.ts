@@ -140,7 +140,7 @@ describe("schema validation", () => {
 
   test("rejects invalid sources", () => {
     assert.throws(() => schema("users; drop table x", {}), TypeError);
-    assert.doesNotThrow(() => schema("app.users", {}));
+    assert.throws(() => schema("app.users", {}), TypeError);
   });
 });
 

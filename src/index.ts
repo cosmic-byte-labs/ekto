@@ -1,5 +1,6 @@
 // Public entry point of ekto.
 
+export * from "./changeset.ts";
 export {
   type AnyField,
   type AnySchema,
