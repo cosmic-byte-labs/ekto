@@ -10,13 +10,14 @@ Repo that is the only part that touches the database. It is a library; there is 
 
 ```bash
 pnpm install --frozen-lockfile   # once per worktree (slot setup does it)
-pnpm check                       # lint + typecheck + tests + build; run before pushing
+pnpm check                       # lint + typecheck + tests + build + docs:check; run before pushing
 pnpm test                        # node --test over src/**/*.test.ts
 node --test src/index.test.ts    # one file
 pnpm test:coverage               # tests with Node's built-in coverage
 EKTO_PG_URL=postgres://… pnpm test  # also run the Repo tests against Postgres (skipped without it)
 pnpm format                      # Biome: fix formatting and lint where it can
 pnpm build                       # tsc → dist/ (tests excluded)
+pnpm docs                        # TypeDoc → docs/api/ (git-ignored); docs:check only validates
 ```
 
 ## Conventions
@@ -34,3 +35,8 @@ pnpm build                       # tsc → dist/ (tests excluded)
 - **Node support:** the package supports Node ≥ 22.19 (`engines`); CI tests 22 and 26. Do not use
   APIs newer than Node 22 in `src/` without a fallback.
 - Formatting is Biome's (2-space indent, double quotes). Do not hand-format against it.
+- **API docs are TypeDoc's**, from the doc comments of what the entry points in `typedoc.json`
+  export (one per `package.json` export; each entry file has a `@module` tag). `docs:check` fails
+  on warnings. A public type that refers to an unexported helper type warns: export the helper,
+  or add it to `intentionallyNotExported` if it is internal. TypeDoc does not support TypeScript
+  7 yet, so `.pnpmfile.cjs` gives it TypeScript 6.0 of its own; the build stays on 7.

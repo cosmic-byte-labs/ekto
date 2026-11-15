@@ -1,5 +1,7 @@
 /**
  * Migrations (`ekto/migrate`), following Ecto.Migration and Ecto.Migrator.
+ *
+ * @module ekto/migrate
  */
 
 export {

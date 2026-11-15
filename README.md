@@ -642,8 +642,9 @@ Needs Node 26 (22.19+ works) and pnpm 12. Notes for coding agents are in [AGENTS
 
 ```bash
 pnpm install
-pnpm check                          # lint, typecheck, tests, build
+pnpm check                          # lint, typecheck, tests, build, API docs
 pnpm test                           # node --test over src/**/*.test.ts
 EKTO_PG_URL=postgres://… pnpm test  # also run the Repo tests against Postgres
 pnpm format                         # Biome: fix formatting and lint
+pnpm docs                           # API docs with TypeDoc, in docs/api
 ```

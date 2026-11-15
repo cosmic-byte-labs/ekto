@@ -45,7 +45,9 @@
     "format": "biome check --write .",
     "test": "node --test 'src/**/*.test.ts'",
     "test:coverage": "node --test --experimental-test-coverage 'src/**/*.test.ts'",
-    "check": "biome check . && tsc --noEmit && pnpm test && pnpm build"
+    "docs": "typedoc",
+    "docs:check": "typedoc --emit none",
+    "check": "biome check . && tsc --noEmit && pnpm test && pnpm build && pnpm docs:check"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.7",
@@ -54,6 +56,7 @@
     "kysely": "0.29.9",
     "pg": "^8.23.1",
     "sqlite3": "^6.0.1",
+    "typedoc": "0.28.20",
     "typescript": "^7.0.2"
   },
   "peerDependencies": {

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "name": "ekto",
+  "entryPoints": [
+    "src/index.ts",
+    "src/postgres/index.ts",
+    "src/sqlite/index.ts",
+    "src/migrate/index.ts",
+    "src/testing/index.ts"
+  ],
+  "tsconfig": "tsconfig.build.json",
+  "readme": "README.md",
+  "out": "docs/api",
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "sourceLinkTemplate": "https://github.com/cosmic-byte-labs/ekto/blob/{gitRevision}/{path}#L{line}",
+  "navigationLinks": {
+    "GitHub": "https://github.com/cosmic-byte-labs/ekto"
+  },
+  "validation": {
+    "notExported": true,
+    "invalidLink": true,
+    "notDocumented": false
+  },
+  "intentionallyNotExported": [
+    "src/association.ts:Empty",
+    "src/association.ts:LoadedAssociation",
+    "src/association.ts:Nested",
+    "src/association.ts:PreloadValue",
+    "src/association.ts:TableOf",
+    "src/association.ts:UnionToIntersection",
+    "src/changeset.ts:Changes",
+    "src/changeset.ts:ChangesetFields",
+    "src/changeset.ts:Types",
+    "src/kysely.ts:Nullable",
+    "src/multi.ts:Add",
+    "src/multi.ts:Changes",
+    "src/multi.ts:Input",
+    "src/multi.ts:TableOf",
+    "src/repo.ts:ExecRow",
+    "src/repo.ts:MissingColumns",
+    "src/repo.ts:RowType",
+    "src/repo.ts:TableOf",
+    "src/repo.ts:WithPreloads",
+    "src/schema.ts:FieldValue",
+    "src/schema.ts:InsertedField",
+    "src/schema.ts:LoadedValue",
+    "src/schema.ts:NewValue",
+    "src/schema.ts:SetFlag",
+    "src/schema.ts:Simplify",
+    "src/schema.ts:WithMeta",
+    "src/sql.ts:Identifier",
+    "src/sql.ts:Part",
+    "src/sql.ts:Splice",
+    "src/sql.ts:tag"
+  ],
+  "treatValidationWarningsAsErrors": true
+}

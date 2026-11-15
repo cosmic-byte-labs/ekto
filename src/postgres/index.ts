@@ -1,5 +1,7 @@
 /**
  * PostgreSQL support (`ekto/postgres`).
+ *
+ * @module ekto/postgres
  */
 
 import {

@@ -16,6 +16,8 @@
  *   `node:test`'s default.
  * - `withSandbox(Repo, fn)` gives the sandbox to the async context of `fn`
  *   only (Ecto's ownership), so tests can run concurrently.
+ *
+ * @module ekto/testing
  */
 
 import {

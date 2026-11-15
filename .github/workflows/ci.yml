@@ -50,3 +50,5 @@ jobs:
           EKTO_PG_URL: postgres://postgres:postgres@localhost:5432/ekto_test
       - name: Build
         run: pnpm build
+      - name: API docs
+        run: pnpm docs:check

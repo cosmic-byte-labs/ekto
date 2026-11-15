@@ -1,4 +1,8 @@
-// Public entry point of ekto.
+/**
+ * Schemas, changesets and the Repo: the core of ekto.
+ *
+ * @module ekto
+ */
 
 export type {
   Adapter,

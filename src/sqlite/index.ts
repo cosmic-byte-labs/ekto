@@ -1,5 +1,7 @@
 /**
  * SQLite support (`ekto/sqlite`), following ecto_sqlite3.
+ *
+ * @module ekto/sqlite
  */
 
 import type { SQLInputValue } from "node:sqlite";
