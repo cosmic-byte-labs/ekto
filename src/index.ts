@@ -1,3 +1,131 @@
-// Public entry point of ekto. The API is described in docs/design.md and is
-// built once the design is approved.
-export {};
+// Public entry point of ekto.
+
+export type {
+  Adapter,
+  ConstraintViolation,
+  QueryEvent,
+  QueryResult,
+} from "./adapter.ts";
+export {
+  type Association,
+  type AssociationName,
+  type AssociationsOf,
+  association,
+  associations,
+  type BelongsTo,
+  belongsTo,
+  buildAssoc,
+  type Cardinality,
+  type HasMany,
+  type HasOne,
+  hasMany,
+  hasOne,
+  isLoaded,
+  type ManyToMany,
+  manyToMany,
+  type Preloaded,
+  type PreloadedFields,
+  type PreloadQuery,
+  type PreloadRefine,
+  type PreloadSpec,
+  type Reflection,
+  type RelatedSchema,
+} from "./association.ts";
+export * from "./changeset.ts";
+export {
+  ChangeError,
+  ConstraintError,
+  MultiplePrimaryKeyError,
+  MultipleResultsError,
+  NoPrimaryKeyFieldError,
+  NoPrimaryKeyValueError,
+  NoResultsError,
+  SchemaMismatchError,
+  StaleEntryError,
+} from "./errors.ts";
+export type {
+  DriverTypes,
+  DriverValue,
+  DriverValueOf,
+  KyselyColumn,
+  KyselyTable,
+  KyselyTables,
+} from "./kysely.ts";
+export {
+  Multi,
+  type MultiResult,
+  type Operation,
+  type RunResult,
+} from "./multi.ts";
+export type { PreloadOptions } from "./preloader.ts";
+export {
+  createRepo,
+  type DeleteOptions,
+  type ExecResult,
+  type InsertAllEntry,
+  type InsertAllOptions,
+  type InsertAllResult,
+  type InsertOptions,
+  type OnConflict,
+  type PersistedName,
+  type Query,
+  type QueryRows,
+  type Repo,
+  type RepoConfig,
+  type RowOf,
+  type SchemaQuery,
+  type UpdateAll,
+  type UpdateOptions,
+  type WriteResult,
+} from "./repo.ts";
+export {
+  type AnyField,
+  type AnySchema,
+  type DefaultFlags,
+  Field,
+  type FieldFlags,
+  type FieldName,
+  type FieldOptions,
+  type Fields,
+  getMeta,
+  type Infer,
+  isSchema,
+  type Loader,
+  load,
+  type Meta,
+  meta,
+  type New,
+  putMeta,
+  type RecordState,
+  type Schema,
+  type SchemaClass,
+  type SchemaOf,
+  schema,
+  t,
+  type ValueOfField,
+} from "./schema.ts";
+export {
+  isQueryable,
+  type Queryable,
+  Sql,
+  type SqlSyntax,
+  sql,
+} from "./sql.ts";
+/** The built-in types, for use in custom types and schemaless changesets. */
+export * as types from "./type.ts";
+export {
+  type BaseType,
+  CastError,
+  type CastErrorMeta,
+  type CastResult,
+  castValue,
+  castValueOrThrow,
+  dumpValue,
+  equalValues,
+  error,
+  loadValue,
+  ok,
+  type PrimitiveType,
+  type Type,
+  type ValueOf,
+} from "./type.ts";

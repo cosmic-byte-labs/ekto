@@ -12,7 +12,26 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./postgres": {
+      "types": "./dist/postgres/index.d.ts",
+      "default": "./dist/postgres/index.js"
+    },
+    "./sqlite": {
+      "types": "./dist/sqlite/index.d.ts",
+      "default": "./dist/sqlite/index.js"
+    },
+    "./migrate": {
+      "types": "./dist/migrate/index.d.ts",
+      "default": "./dist/migrate/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
     }
+  },
+  "bin": {
+    "ekto": "./dist/migrate/bin.js"
   },
   "files": [
     "dist/",
@@ -30,7 +49,15 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.7",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "better-sqlite3": "^13.2.0",
+    "kysely": "0.29.9",
+    "pg": "^8.23.1",
     "typescript": "^7.0.2"
+  },
+  "peerDependencies": {
+    "kysely": "~0.29.9"
   }
 }

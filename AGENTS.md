@@ -14,6 +14,7 @@ pnpm check                       # lint + typecheck + tests + build; run before 
 pnpm test                        # node --test over src/**/*.test.ts
 node --test src/index.test.ts    # one file
 pnpm test:coverage               # tests with Node's built-in coverage
+EKTO_PG_URL=postgres://… pnpm test  # also run the Repo tests against Postgres (skipped without it)
 pnpm format                      # Biome: fix formatting and lint where it can
 pnpm build                       # tsc → dist/ (tests excluded)
 ```
