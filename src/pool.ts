@@ -152,21 +152,25 @@ export class ConnectionPool<T> {
       const onAbort = () => {
         const index = this.#queue.indexOf(waiter);
         if (index !== -1) this.#queue.splice(index, 1);
+        this.#holdLoop();
         reject(signal?.reason);
       };
       const waiter: Waiter<T> = {
         sent: performance.now(),
         resolve: (connection) => {
           signal?.removeEventListener("abort", onAbort);
+          this.#holdLoop();
           resolve(connection);
         },
         reject: (error) => {
           signal?.removeEventListener("abort", onAbort);
+          this.#holdLoop();
           reject(error);
         },
       };
       signal?.addEventListener("abort", onAbort, { once: true });
       this.#queue.push(waiter);
+      this.#holdLoop();
     });
     return connection ?? this.#connect();
   }
@@ -315,7 +319,14 @@ export class ConnectionPool<T> {
         this.#timeout(delay, time);
       } else this.#startPoll(first?.sent ?? time);
     }, this.#interval);
-    this.#poll.unref();
+    this.#holdLoop();
+  }
+
+  // The poll timer keeps the process alive only while callers wait, as
+  // nothing else may: it drops them when the queue is slow.
+  #holdLoop(): void {
+    if (this.#queue.length > 0) this.#poll?.ref();
+    else this.#poll?.unref();
   }
 
   #timeout(delay: number, time: number): void {
