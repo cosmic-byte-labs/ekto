@@ -255,10 +255,11 @@ the database. The record here represents the data that we want to insert into th
 A successful insertion will return a result like so:
 
 ```ts
-{
-  ok: true,
-  value: { id: 1, first_name: null, last_name: null, age: null }
-}
+result;
+// {
+//   ok: true,
+//   value: { id: 1, first_name: null, last_name: null, age: null }
+// }
 ```
 
 `ok` can be checked to ensure that the insertion succeeded. A situation where the insertion may
@@ -335,19 +336,20 @@ knows about the `person`, the changes and the validation rules that must be met 
 can be entered into the database. When this line runs, we'll get this result:
 
 ```ts
-{
-  ok: false,
-  changeset: {
-    action: "insert",
-    changes: {},
-    errors: [
-      { field: "first_name", message: "can't be blank", meta: { validation: "required" } },
-      { field: "last_name", message: "can't be blank", meta: { validation: "required" } }
-    ],
-    data: { id: null, first_name: null, last_name: null, age: null },
-    valid: false
-  }
-}
+result;
+// {
+//   ok: false,
+//   changeset: {
+//     action: "insert",
+//     changes: {},
+//     errors: [
+//       { field: "first_name", message: "can't be blank", meta: { validation: "required" } },
+//       { field: "last_name", message: "can't be blank", meta: { validation: "required" } }
+//     ],
+//     data: { id: null, first_name: null, last_name: null, age: null },
+//     valid: false
+//   }
+// }
 ```
 
 Just like the last time we did an insertion, this returns a result. This time however, `ok` is
@@ -707,7 +709,7 @@ await repo.update(cs);
 Just like `repo.insert`, `repo.update` will return a result:
 
 ```ts
-{ ok: true, value: { id: 1, first_name: "Ryan", last_name: "Bigg", age: 29 } }
+// { ok: true, value: { id: 1, first_name: "Ryan", last_name: "Bigg", age: 29 } }
 ```
 
 If the changeset fails for any reason, the result of `repo.update` will be
