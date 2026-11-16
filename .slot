@@ -4,7 +4,7 @@ version = 1
 name = "ekto"
 github = "cosmic-byte-labs/ekto"
 
-# Development runs on Node 26; the package supports Node >= 22.19 (package.json engines, CI matrix).
+# Development runs on Node 26; the package supports Node >= 24.3 (package.json engines, CI matrix).
 [tools]
 node = "26"
 pnpm = "12.21.0"

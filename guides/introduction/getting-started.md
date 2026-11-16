@@ -24,7 +24,7 @@ pnpm init
 pnpm pkg set type=module
 ```
 
-ekto runs TypeScript files directly with Node 22.19 or later, so there is nothing to compile
+ekto runs TypeScript files directly with Node 24.3 or later, so there is nothing to compile
 for this guide. To add ekto, we install it together with [Kysely](https://kysely.dev), which
 ekto builds its queries with, and `pg` (node-postgres), the driver that talks to PostgreSQL:
 

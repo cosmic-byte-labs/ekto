@@ -439,8 +439,8 @@ function connector(driver: SqliteDriverName) {
  * open its own.
  *
  * `sqlite({ driver: "node:sqlite" })` connects with Node's built-in
- * `node:sqlite` instead, which needs no package (Node prints that it is
- * experimental). It runs each query on the event loop's thread: a long
+ * `node:sqlite` instead, which needs no package (earlier Node 24 releases
+ * print that it is experimental). It runs each query on the event loop's thread: a long
  * query, or a wait of up to `busyTimeout` for a write lock another process
  * holds, stops everything else meanwhile. Its pool has one connection, as
  * with more, one waiting for another's write lock would hold the thread

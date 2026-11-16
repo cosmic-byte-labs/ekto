@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         # The oldest Node the package supports (package.json engines) and the one we develop on.
-        node: ["22", "26"]
+        node: ["24", "26"]
     name: check (node ${{ matrix.node }})
     services:
       # For the Repo integration tests (EKTO_PG_URL); they are skipped without it.

@@ -32,8 +32,9 @@ pnpm docs:build                  # TypeDoc → docs/api/ (git-ignored); docs:che
   (`verbatimModuleSyntax`).
 - **Tests sit beside the code** as `*.test.ts`, using `node:test` and `node:assert/strict`. Shared
   test helpers are `*.test-helper.ts`; neither ships in the package.
-- **Node support:** the package supports Node ≥ 22.19 (`engines`); CI tests 22 and 26. Do not use
-  APIs newer than Node 22 in `src/` without a fallback.
+- **Node support:** the package supports Node ≥ 24.3 (`engines`), the first Node 24 that strips
+  types without a warning; CI tests 24 and 26. Do not use APIs newer than Node 24 in `src/`
+  without a fallback.
 - Formatting is Biome's (2-space indent, double quotes). Do not hand-format against it.
 - **API docs are TypeDoc's**, from the doc comments of what the entry points in `typedoc.json`
   export (one per `package.json` export; each entry file has a `@module` tag). `docs:check` fails

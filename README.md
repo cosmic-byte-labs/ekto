@@ -59,7 +59,7 @@ Guides that follow Ecto's own, in `guides/` and in the API docs (`pnpm docs:buil
 
 ## Install
 
-ekto runs on Node 22.19 or later, and needs `kysely` and the driver of your database.
+ekto runs on Node 24.3 or later, and needs `kysely` and the driver of your database.
 
 ```bash
 # PostgreSQL
@@ -660,7 +660,7 @@ Most names map directly (`Repo.insert` is `repo.insert`, `{:ok, user}` is `{ ok:
 
 ## Development
 
-Needs Node 26 (22.19+ works) and pnpm 12. Notes for coding agents are in [AGENTS.md](AGENTS.md).
+Needs Node 26 (24.3+ works) and pnpm 12. Notes for coding agents are in [AGENTS.md](AGENTS.md).
 
 ```bash
 pnpm install
