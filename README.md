@@ -1,9 +1,29 @@
-# ekto
+<h1 align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/logo-dark.svg">
+  <img alt="ekto" src=".github/assets/logo-light.svg" width="270">
+</picture>
+</h1>
 
-An Ecto-inspired data layer for TypeScript. Inspired by Elixir's [Ecto](https://hexdocs.pm/ecto);
-not affiliated with it.
+<p align="center">
+  Schemas, changesets and a Repo for TypeScript, after Elixir's <a href="https://hexdocs.pm/ecto">Ecto</a>.
+</p>
 
-ekto is split into four pieces, as Ecto is:
+<p align="center">
+  <a href="https://github.com/cosmic-byte-labs/ekto/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/cosmic-byte-labs/ekto/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Node 24.3 or later" src="https://img.shields.io/badge/node-%E2%89%A5%2024.3-5A6474">
+</p>
+
+Your records are plain objects. Input goes through a changeset, which says what may change and,
+when it can't, why. Queries are Kysely builders you compose like any other function. And one
+thing, the Repo, talks to the database, so you always know where the side effects are.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/pieces-dark.svg">
+  <img alt="A changeset is written and a query is read through the Repo, the only part that touches the database; both come back as plain values typed by the schema" src=".github/assets/pieces-light.svg">
+</picture>
+
+ekto is inspired by Ecto and not affiliated with it. It is split into four pieces, as Ecto is:
 
 - **Repo**: the only part of your code that touches the database. Inserts, updates, deletes,
   reads, transactions and preloads all go through it.
@@ -272,6 +292,11 @@ goes through a join table. `buildAssoc(user, "posts", { title: "Hi" })` builds a
 
 ## Changesets
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/changeset-dark.svg">
+  <img alt="The quickstart's changeset: params are cast and validated, the Repo inserts, and the result is either the record or the changeset with its errors" src=".github/assets/changeset-light.svg">
+</picture>
+
 A changeset holds the changes to a record, the errors found so far and the constraints to check
 when it is written. Every function returns a new changeset. Called with a changeset first, a
 function applies directly; called without, it returns a step for `pipe`:
@@ -443,6 +468,11 @@ const result = await repo.transact(async (tx) => {
 });
 ```
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/multi-dark.svg">
+  <img alt="A Multi is a list of named steps; repo.transact runs them in one transaction, passing each step the results so far, and either commits them all or rolls back at the first failure" src=".github/assets/multi-light.svg">
+</picture>
+
 A `Multi` describes named operations as data; nothing runs until `repo.transact(multi)`. Later
 steps receive the results of earlier ones, and the first failure rolls everything back:
 
@@ -559,6 +589,11 @@ await migrator.rollback({ step: 1 });
 `ekto/testing` runs each test in a transaction that is rolled back when the test ends, like
 Ecto's SQL sandbox. While the sandbox is active, your application's Repo runs on it, so the code
 under test needs no changes.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/sandbox-dark.svg">
+  <img alt="Each test runs in a transaction that is rolled back, so the users table is empty again after every test" src=".github/assets/sandbox-light.svg">
+</picture>
 
 ```ts
 import assert from "node:assert/strict";

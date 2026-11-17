@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="288" height="114" viewBox="-6 2 288 114" role="img" aria-label="ekto">
+<title>ekto</title>
+<g fill="none" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" stroke="#E6EDF3">
+  <path d="M10 70 H70 A30 30 0 1 0 61.2 91.2"/>
+  <path d="M98 10 V100"/>
+  <path d="M134 40 L98 74"/>
+  <path d="M112 61 L138 100"/>
+  <path d="M168 18 V82 Q168 100 186 100 H192"/>
+  <path d="M152 42 H190"/>
+</g>
+<circle cx="244" cy="70" r="30" fill="none" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" stroke="#3FC1A5"/>
+<circle cx="244" cy="70" r="9" fill="#3FC1A5" opacity="0.35"/>
+</svg>
