@@ -1,15 +1,14 @@
 ---
 
-title: Constraints and Upserts
+title: Constraints and upserts
 group: How-To's
 ---
 
-# Constraints and Upserts
+# Constraints and upserts
 
 In this guide we will learn how to use constraints and upserts. To showcase those features, we
-will work on a practical scenario: which is by studying a many to many relationship between
-posts and tags. It follows Ecto's
-[Constraints and Upserts](https://hexdocs.pm/ecto/constraints-and-upserts.html) guide.
+will work on a practical scenario: a many to many relationship between posts and tags. It
+follows Ecto's [Constraints and Upserts](https://hexdocs.pm/ecto/constraints-and-upserts.html) guide.
 
 ## Posts and tags
 
@@ -213,7 +212,7 @@ async function getOrInsertTag(name: string) {
 While the above won't throw an error in case of conflicts, it also won't read anything back, so
 it will return a tag without an id. One solution is to force an update to happen in case of
 conflicts, even if the update is about setting the tag name to its current name. In such cases,
-PostgreSQL also requires the `conflictTarget` option to be given, which is the column (or a list
+ekto also requires the `conflictTarget` option to be given, which is the column (or a list
 of columns) we are expecting the conflict to happen:
 
 ```ts
@@ -234,7 +233,7 @@ tags are sent, we will perform 10 queries. Can we further improve this?
 
 ekto accepts the `onConflict` option not only in `repo.insert` but also in the `repo.insertAll`
 function. This means we can build one query that attempts to insert all missing tags and then
-another query that fetches all of them at once. Let's see how `parseTags` will look like after
+another query that fetches all of them at once. Let's see how `parseTags` will look after
 those changes:
 
 ```ts
@@ -264,7 +263,7 @@ async function insertAndGetAll(names: string[]) {
 Instead of getting and inserting each tag individually, the code above works on all tags at once,
 first by building a list of entries which is given to `repo.insertAll`. Then we look up all tags
 with the given names. Regardless of how many tags are sent, we will perform only 2 queries -
-unless no tag is sent, in which we return an empty list back promptly. This solution is only
+unless no tag is sent, in which case we return an empty list back promptly. This solution is only
 possible thanks to the `onConflict` option, which guarantees `insertAll` won't fail in case a
 unique index is violated, such as from duplicate tag names. Remember, `insertAll` won't
 autogenerate values like timestamps. That's why we set `inserted_at` and `updated_at` ourselves,

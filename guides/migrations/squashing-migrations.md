@@ -13,7 +13,7 @@ point in time, not including content. ekto has no such commands, but the databas
 the same. This guide follows ecto_sql's
 [Squashing Migrations](https://hexdocs.pm/ecto_sql/squashing_migrations.html).
 
-On Postgres, Ecto's `mix ecto.dump` runs `pg_dump`, and `mix ecto.load` runs `psql`; so can we.
+On PostgreSQL, Ecto's `mix ecto.dump` runs `pg_dump`, and `mix ecto.load` runs `psql`; so can we.
 
 For example:
 
@@ -79,6 +79,6 @@ With SQLite, the `sqlite3` command does the same:
 
 ```bash
 sqlite3 my_app.db ".schema --nosys" > structure.sql
-sqlite3 my_app.db ".dump schema_migrations" >> structure.sql
+sqlite3 my_app.db ".dump --data-only schema_migrations" >> structure.sql
 sqlite3 my_app_new.db < structure.sql
 ```

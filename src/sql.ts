@@ -9,7 +9,7 @@
  * sql`select * from users where lower(email) = ${email.toLowerCase()}`
  * ```
  *
- * A `sql` value is dialect-neutral: placeholders (`$1` on Postgres, `?` on
+ * A `sql` value is dialect-neutral: placeholders (`$1` on PostgreSQL, `?` on
  * SQLite) and identifier quoting are only decided when the Repo compiles it.
  */
 

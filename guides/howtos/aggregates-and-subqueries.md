@@ -35,7 +35,7 @@ await repo.one(
 `repo.aggregate` supports `count`, `avg`, `sum`, `min` and `max`. On a schema, the result is
 loaded with the field's type, and `avg` of an integer field is a number.
 
-At first, it looks like the implementation of `aggregate` is quite straight-forward. You could
+At first, it looks like the implementation of `aggregate` is quite straightforward. You could
 even start to wonder why it was added to ekto in the first place. However, complexities start to
 arise on queries that rely on `limit`, `offset` or `distinct` clauses.
 
@@ -158,7 +158,7 @@ export class Lending extends schema("lendings", {
 
 Now consider we want to retrieve the name of every book alongside the name of the last person the
 library has lent it to. To do so, we need to find the last lending ID of every book, and then join
-on the book and visitor tables. With subqueries, that's straight-forward:
+on the book and visitor tables. With subqueries, that's straightforward:
 
 ```ts
 const lastLendings = repo.kysely

@@ -1,10 +1,10 @@
 ---
 
-title: Getting Started
+title: Getting started
 group: Introduction
 ---
 
-# Getting Started
+# Getting started
 
 This guide is an introduction to ekto, a data layer for TypeScript inspired by Elixir's
 [Ecto](https://hexdocs.pm/ecto). In this guide, we're going to learn some basics about ekto,
@@ -223,11 +223,15 @@ We can set values on these fields when building it:
 person = Person.new({ age: 28 });
 ```
 
-Or with syntax like this:
+Or from an existing record, with syntax like this:
 
 ```ts
-person = { ...person, age: 28 };
+person = Person.new({ ...person, age: 28 });
 ```
+
+A spread alone (`{ ...person, age: 28 }`) gives a plain object without the record's metadata,
+which `cast` and the Repo reject. To change a record loaded from the database, use a changeset,
+as we do in [Updating records](#updating-records).
 
 We can retrieve values using this syntax:
 

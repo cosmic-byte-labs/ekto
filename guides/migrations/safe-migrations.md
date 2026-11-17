@@ -13,22 +13,22 @@ change.
 
 ## Quick reference
 
-| Operation                                                                                       | Risk                                                 | Safe approach                                                                          |
-| ----------------------------------------------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| [Adding an index](#adding-an-index)                                                             | Blocks writes                                        | Use `concurrently: true` and disable transactions                                      |
-| [Dropping an index](#dropping-an-index)                                                         | Blocks reads and writes                              | Use `concurrently: true` and disable transactions                                      |
-| [Adding a reference or foreign key](#adding-a-reference-or-foreign-key)                         | Blocks writes on both tables                         | Use `validate: false`, then validate separately                                        |
-| [Adding a column with a default value](#adding-a-column-with-a-default-value)                   | Volatile or expression defaults rewrite the table    | Constant defaults are fast on Postgres 11+; otherwise add the column, then the default |
-| [Changing a column's default value](#changing-a-columns-default-value)                          | `modify` can force an unnecessary type change        | Use raw SQL to change only the default                                                 |
-| [Changing the type of a column](#changing-the-type-of-a-column)                                 | Table rewrite                                        | Create a new column, migrate data, swap reads, drop the old column                     |
-| [Removing a column](#removing-a-column)                                                         | Query failures                                       | Remove it from the schema first, then drop it                                          |
-| [Renaming a column](#renaming-a-column)                                                         | Query failures                                       | Use a view, or rewrite the column                                                      |
-| [Renaming a table](#renaming-a-table)                                                           | Query failures                                       | Prefer renaming the schema instead                                                     |
-| [Adding a check constraint](#adding-a-check-constraint)                                         | Full table scan                                      | Create with `validate: false`, then validate separately                                |
-| [Setting NOT NULL on an existing column](#setting-not-null-on-an-existing-column)               | Full table scan                                      | Use a check constraint, validate it, then add `NOT NULL`                               |
-| [Adding a JSON column](#adding-a-json-column)                                                   | `SELECT DISTINCT` errors                             | Use `jsonb` (or `map`) instead of `json`                                               |
-| [Removing or replacing a PostgreSQL enum value](#removing-or-replacing-a-postgresql-enum-value) | Removing a value requires replacing the type         | Rename with `RENAME VALUE`; otherwise phase app changes, backfill, replace the type    |
-| [Adding a PostgreSQL extension](#adding-a-postgresql-extension)                                 | Privilege or extension-specific install requirements | Use `IF NOT EXISTS`; disable transactions only if the extension requires it            |
+| Operation                                                                                       | Risk                                                 | Safe approach                                                                            |
+| ----------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| [Adding an index](#adding-an-index)                                                             | Blocks writes                                        | Use `concurrently: true` and disable transactions                                        |
+| [Dropping an index](#dropping-an-index)                                                         | Blocks reads and writes                              | Use `concurrently: true` and disable transactions                                        |
+| [Adding a reference or foreign key](#adding-a-reference-or-foreign-key)                         | Blocks writes on both tables                         | Use `validate: false`, then validate separately                                          |
+| [Adding a column with a default value](#adding-a-column-with-a-default-value)                   | Volatile or expression defaults rewrite the table    | Constant defaults are fast on PostgreSQL 11+; otherwise add the column, then the default |
+| [Changing a column's default value](#changing-a-columns-default-value)                          | `modify` can force an unnecessary type change        | Use raw SQL to change only the default                                                   |
+| [Changing the type of a column](#changing-the-type-of-a-column)                                 | Table rewrite                                        | Create a new column, migrate data, swap reads, drop the old column                       |
+| [Removing a column](#removing-a-column)                                                         | Query failures                                       | Remove it from the schema first, then drop it                                            |
+| [Renaming a column](#renaming-a-column)                                                         | Query failures                                       | Use a view, or rewrite the column                                                        |
+| [Renaming a table](#renaming-a-table)                                                           | Query failures                                       | Prefer renaming the schema instead                                                       |
+| [Adding a check constraint](#adding-a-check-constraint)                                         | Full table scan                                      | Create with `validate: false`, then validate separately                                  |
+| [Setting NOT NULL on an existing column](#setting-not-null-on-an-existing-column)               | Full table scan                                      | Use a check constraint, validate it, then add `NOT NULL`                                 |
+| [Adding a JSON column](#adding-a-json-column)                                                   | `SELECT DISTINCT` errors                             | Use `jsonb` (or `map`) instead of `json`                                                 |
+| [Removing or replacing a PostgreSQL enum value](#removing-or-replacing-a-postgresql-enum-value) | Removing a value requires replacing the type         | Rename with `RENAME VALUE`; otherwise phase app changes, backfill, replace the type      |
+| [Adding a PostgreSQL extension](#adding-a-postgresql-extension)                                 | Privilege or extension-specific install requirements | Use `IF NOT EXISTS`; disable transactions only if the extension requires it              |
 
 ## All scenarios
 
@@ -45,7 +45,7 @@ To see the SQL a migration runs, and the transactions and lock around it, see
 ## Adding an index
 
 Creating an index will [block writes](https://www.postgresql.org/docs/current/sql-createindex.html)
-to the table in Postgres unless you use `CONCURRENTLY`.
+to the table in PostgreSQL unless you use `CONCURRENTLY`.
 
 ### Bad
 
@@ -60,7 +60,7 @@ export default migration({
 
 ### Good
 
-With Postgres, instead create the index concurrently which does not block writes. Disable the DDL
+With PostgreSQL, instead create the index concurrently which does not block writes. Disable the DDL
 transaction in the migration to avoid a database transaction which is not compatible with
 `CONCURRENTLY` database operations:
 
@@ -88,7 +88,7 @@ separate other changes to later migrations.
 
 ## Dropping an index
 
-In Postgres, dropping an index blocks reads and writes while acquiring an `ACCESS EXCLUSIVE` lock.
+In PostgreSQL, dropping an index blocks reads and writes while acquiring an `ACCESS EXCLUSIVE` lock.
 
 ### Bad
 
@@ -154,7 +154,10 @@ In the second migration
 ```ts
 export default migration({
   change(m) {
-    m.execute("ALTER TABLE posts VALIDATE CONSTRAINT posts_group_id_fkey", "");
+    m.execute(
+      "ALTER TABLE posts VALIDATE CONSTRAINT posts_group_id_fkey",
+      async () => {}, // validating has nothing to undo
+    );
     // Obtains a ShareUpdateExclusiveLock which doesn't block reads or writes
   },
 });
@@ -191,7 +194,7 @@ change. The main remaining hazard is volatile or expression defaults.
 ### Caveats
 
 Note: A constant default is generally safe in
-[Postgres 11+](https://www.postgresql.org/docs/release/11.0/). The volatile-expression example
+[PostgreSQL 11+](https://www.postgresql.org/docs/release/11.0/). The volatile-expression example
 below remains unsafe.
 
 ```ts
@@ -250,7 +253,7 @@ export default migration({
 ```
 
 Note: we cannot use `modify` here as it will include updating the column type as well
-unnecessarily, causing Postgres to rewrite the table.
+unnecessarily, causing PostgreSQL to rewrite the table.
 
 Schema change to read the new column:
 
@@ -291,7 +294,7 @@ export default migration({
 ```
 
 The issue is that we cannot use `modify` as it will include updating the column type as well
-unnecessarily, causing Postgres to rewrite the table.
+unnecessarily, causing PostgreSQL to rewrite the table.
 
 ### Good
 
@@ -320,19 +323,19 @@ export default migration({
 ## Changing the type of a column
 
 Changing the type of a column may cause the table to be rewritten. During this time, reads and
-writes are blocked in Postgres.
+writes are blocked in PostgreSQL.
 
 ### Bad
 
-Safe in Postgres:
+Safe in PostgreSQL:
 
 - increasing length on varchar or removing the limit
 - changing varchar to text
 - changing text to varchar with no length limit
-- Postgres 9.2+ - increasing precision (NOTE: not scale) of decimal or numeric columns. eg,
+- PostgreSQL 9.2+ - increasing precision (NOTE: not scale) of decimal or numeric columns. eg,
   increasing 8,2 to 10,2 is safe. Increasing 8,2 to 8,4 is not safe.
-- Postgres 9.2+ - changing decimal or numeric to be unconstrained
-- Postgres 12+ - changing timestamp to timestamptz when session TZ is UTC
+- PostgreSQL 9.2+ - changing decimal or numeric to be unconstrained
+- PostgreSQL 12+ - changing timestamp to timestamptz when session TZ is UTC
 
 ```ts
 export default migration({
@@ -491,6 +494,7 @@ Rename the schema only and all calling code, and don't rename the table:
 ```diff
 -export const Weather = schema("weather", {
 +export const Forecast = schema("weather", {
+   id: t.id(),
    temp_lo: t.integer().nullable(),
    temp_hi: t.integer().nullable(),
    prcp: t.float().nullable(),
@@ -527,7 +531,7 @@ Take a phased approach and physically rewrite the table:
 
 ## Adding a check constraint
 
-Adding a check constraint blocks reads and writes to the table in Postgres while every row is
+Adding a check constraint blocks reads and writes to the table in PostgreSQL while every row is
 checked.
 
 ### Bad
@@ -580,7 +584,7 @@ export default migration({
   change(m) {
     m.execute(
       "ALTER TABLE products VALIDATE CONSTRAINT price_must_be_positive",
-      "",
+      async () => {}, // validating has nothing to undo
     );
     // Acquires SHARE UPDATE EXCLUSIVE lock, which allows updates to continue
   },
@@ -591,7 +595,7 @@ These can be in the same deployment, but ensure there are 2 separate migrations.
 
 ## Setting NOT NULL on an existing column
 
-In Postgres, setting NOT NULL on an existing column requires scanning the table and can block
+In PostgreSQL, setting NOT NULL on an existing column requires scanning the table and can block
 concurrent updates while every row is checked.
 
 Just like the Adding a check constraint scenario, there are two operations occurring:
@@ -645,12 +649,15 @@ Then, in the next deployment's migration, we'll enforce the constraint on all ro
 // Deployment 2
 export default migration({
   change(m) {
-    m.execute("ALTER TABLE products VALIDATE CONSTRAINT active_not_null", "");
+    m.execute(
+      "ALTER TABLE products VALIDATE CONSTRAINT active_not_null",
+      async () => {}, // validating has nothing to undo
+    );
   },
 });
 ```
 
-You can then add the NOT NULL to the column after validating the constraint. From the Postgres
+You can then add the NOT NULL to the column after validating the constraint. From the PostgreSQL
 docs:
 
 > SET NOT NULL may only be applied to a column provided none of the records in the table contain a
@@ -659,7 +666,7 @@ docs:
 > the table scan is skipped.
 
 **However** we cannot use `modify` as it will include updating the column type as well
-unnecessarily, causing Postgres to rewrite the table. And as dropping a constraint cannot be
+unnecessarily, causing PostgreSQL to rewrite the table. And as dropping a constraint cannot be
 reversed in `change`, the migration has `up` and `down`:
 
 ```ts
@@ -690,7 +697,7 @@ your desired data integrity, then revisit validating the constraint.
 
 ## Adding a JSON column
 
-In Postgres, there is no equality operator for the json column type, which can cause errors for
+In PostgreSQL, there is no equality operator for the json column type, which can cause errors for
 existing SELECT DISTINCT queries in your application.
 
 ### Bad
@@ -708,7 +715,7 @@ export default migration({
 ### Good
 
 Use jsonb instead. Some say it's like "json" but "better." ekto's `map` type is `jsonb` on
-Postgres.
+PostgreSQL.
 
 ```ts
 export default migration({
@@ -826,7 +833,7 @@ cannot run inside a transaction block.
 ```ts
 export default migration({
   change(m) {
-    m.execute('CREATE EXTENSION "uuid-ossp"');
+    m.execute('CREATE EXTENSION "uuid-ossp"', 'DROP EXTENSION "uuid-ossp"');
   },
 });
 ```
@@ -859,4 +866,4 @@ Andrew Kane and his library [strong_migrations](https://github.com/ankane/strong
 - [PostgreSQL at Scale by James Coleman](https://medium.com/braintree-product-technology/postgresql-at-scale-database-schema-changes-without-downtime-20d3749ed680)
 - [Strong Migrations by Andrew Kane](https://github.com/ankane/strong_migrations)
 - [Adding a NOT NULL CONSTRAINT on PG Faster with Minimal Locking by Christophe Escobar](https://medium.com/doctolib/adding-a-not-null-constraint-on-pg-faster-with-minimal-locking-38b2c00c4d1c)
-- [Postgres Runtime Configuration](https://www.postgresql.org/docs/current/runtime-config-client.html)
+- [PostgreSQL Runtime Configuration](https://www.postgresql.org/docs/current/runtime-config-client.html)

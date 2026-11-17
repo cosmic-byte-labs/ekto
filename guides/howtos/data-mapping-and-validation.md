@@ -26,7 +26,7 @@ Although there is a single schema mapping to both your database and your API, in
 it is better to break this mapping in two. Let's see some practical examples.
 
 Imagine you are working with a client that wants the "Sign Up" form to contain the fields "First
-name", "Last name" along side "E-mail" and other information. You know there are a couple problems
+name", "Last name" alongside "E-mail" and other information. You know there are a couple problems
 with this approach.
 
 First of all, not everyone has a first and last name. Although your client is decided on
@@ -50,8 +50,8 @@ export const Profile = schema("profiles", {
 ```
 
 It is not hard to see how we are polluting our `Profile` schema with UI requirements by adding
-fields such `first_name` and `last_name`. If the `Profile` schema is used for both reading and
-writing data, it may end-up in an awkward place where it is not useful for any, as it contains
+fields such as `first_name` and `last_name`. If the `Profile` schema is used for both reading and
+writing data, it may end up in an awkward place where it is not useful for any, as it contains
 fields that map just to one or the other operation.
 
 One alternative solution is to break the "Database <-> ekto schema <-> Forms / API" mapping in
@@ -126,8 +126,9 @@ attributes apart accordingly:
 ```ts
 type Registration = ReturnType<typeof changeset>["data"];
 
+// validateRequired made sure these are not null
 function toAccount({ email }: Registration) {
-  return { email };
+  return { email: email! };
 }
 
 function toProfile({ first_name, last_name }: Registration) {
@@ -163,8 +164,8 @@ const search = pipe(
 ```
 
 You can use this technique to validate API endpoints, search forms, and other sources of data.
-The choice of using schemas depends mostly if you want to use the same mapping in different places
-or if you desire the record types and loading a schema gives you. Otherwise, you can bypass
+The choice of using schemas depends mostly on whether you want to use the same mapping in
+different places or if you desire the record types and loading a schema gives you. Otherwise, you can bypass
 schemas altogether, be it when using changesets or interacting with the repository.
 
 However, the most important lesson in this guide is not when to use or not to use schemas, but

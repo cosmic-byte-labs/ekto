@@ -12,7 +12,7 @@
  * loading or dumping `null` always gives `null`, so a type implementation never
  * sees it.
  *
- * Converting driver representations (Postgres `int8` as a string, SQLite
+ * Converting driver representations (PostgreSQL `int8` as a string, SQLite
  * booleans as `0`/`1`) is the adapter's job, not the type's, as with Ecto's
  * adapter loaders and dumpers.
  */

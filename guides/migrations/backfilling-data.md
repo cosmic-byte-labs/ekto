@@ -142,12 +142,12 @@ script your deployment runs, with `createMigrator` and the data migrations' fold
 
 ```ts
 // scripts/migrate-data.ts
-import { createMigrator, fileMigrations } from "ekto/migrate";
+import { createMigrator, fileMigrations, type RunOptions } from "ekto/migrate";
 import { repo } from "../src/repo.ts";
 
 // Migrate data in the database. Defaults to migrating to the latest,
 // { all: true }. Also accepts { step: 1 }, or { to: 20200118045751 }.
-export async function migrateData(options = { all: true }) {
+export async function migrateData(options: RunOptions = { all: true }) {
   const migrator = createMigrator({
     repo,
     migrations: fileMigrations("data_migrations"),
@@ -217,7 +217,7 @@ function pageQuery(db: Kysely<any>, lastId: string) {
 }
 
 // If you have integer IDs, start from "0"; with binary IDs, from
-// "00000000-0000-0000-0000-000000000000". (Postgres returns bigint IDs as
+// "00000000-0000-0000-0000-000000000000". (PostgreSQL returns bigint IDs as
 // strings, and they are compared in the database.)
 async function throttleChangeInBatches(
   db: Kysely<any>,
@@ -265,7 +265,7 @@ bug was fixed on a midnight deploy on 2021-08-22.
 Here's how we'll manage the backfill:
 
 1. Create a "temporary" table. In this example, we're creating a real table that we'll drop at the
-   end of the data migration. In Postgres, there are
+   end of the data migration. In PostgreSQL, there are
    [actual temporary tables](https://www.postgresql.org/docs/current/sql-createtable.html) that
    are discarded after the session is over; we're not using those because we need resiliency in
    case the data migration encounters an error. The error would cause the session to be over, and
@@ -293,7 +293,7 @@ Here's how we'll manage the backfill:
 6. [Upsert](https://wiki.postgresql.org/wiki/UPSERT) those changes to the real table. This insert
    will include the ID of the record that already exists and a list of attributes to change for
    that record. Since these insertions will conflict with existing records, we'll instruct
-   Postgres to replace certain fields on conflicts.
+   PostgreSQL to replace certain fields on conflicts.
 
 7. Delete those IDs from the temporary table since they're updated on the real table. Close the
    database transaction for that batch.
@@ -337,7 +337,7 @@ export default migration({
   up(m) {
     m.execute(`
       CREATE TABLE IF NOT EXISTS "${tempTableName}" AS
-      SELECT id FROM weather WHERE inserted_at < '2021-08-21T00:00:00'
+      SELECT id FROM weather WHERE inserted_at < '2021-08-22T00:00:00'
     `);
     m.createIfNotExists(index(tempTableName, ["id"]));
     m.execute((db) => throttleChangeInBatches(db, pageQuery, doChange));

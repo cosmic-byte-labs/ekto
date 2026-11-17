@@ -150,7 +150,8 @@ interface ConflictOptions<D> {
   /**
    * The columns of the unique index the conflict is on (Ecto's
    * `:conflict_target`), or a raw SQL fragment such as
-   * `"(email) WHERE deleted_at IS NULL"`. Required by Postgres to update.
+   * `"(email) WHERE deleted_at IS NULL"`. Required when `onConflict` replaces
+   * fields.
    */
   readonly conflictTarget?:
     | readonly (keyof D & string)[]
@@ -303,7 +304,8 @@ export interface RepoConfig extends ConnectionOptions {
   readonly adapter: Adapter;
   /**
    * The number of connections the Repo keeps (Ecto's `:pool_size`), by
-   * default the adapter's: 10 on PostgreSQL, 1 on SQLite.
+   * default the adapter's: 10 on PostgreSQL, 5 on SQLite (1 with the
+   * `node:sqlite` driver).
    */
   readonly poolSize?: number;
   /**
@@ -1141,7 +1143,7 @@ function bind<DB>(
     return withReturning(query, returning);
   }
 
-  /** The `ON CONFLICT` clause (Ecto's `on_conflict/2` in the Postgres connection). */
+  /** The `ON CONFLICT` clause (Ecto's `on_conflict/2` in the PostgreSQL connection). */
   function onConflictSql(
     schema: AnySchema,
     options: ConflictOptions<Values>,

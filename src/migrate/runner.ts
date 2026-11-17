@@ -40,7 +40,7 @@ export interface MigratorOptions {
    * advisory lock instead, which keeps no transaction open while a
    * migration runs (so a server's `idle_in_transaction_session_timeout`
    * cannot end it). Either lets migrations create indexes concurrently.
-   * Some Postgres-compatible
+   * Some PostgreSQL-compatible
    * systems do not support session-level locks well: PgBouncer in a pool
    * mode other than session, or CockroachDB. On PostgreSQL, the lock holds
    * a connection, so the Repo's pool needs at least two, and migrations

@@ -14,7 +14,7 @@ Migrations, from `ekto/migrate`, are used to do the following:
 
 In order for us to create and run safe migrations on our database, it is helpful to understand
 what is actually happening with the database. To do that, we'll dig deeper into how ekto
-migrations work by looking both at the code being executed and the Postgres logs. This guide
+migrations work by looking both at the code being executed and the PostgreSQL logs. This guide
 follows ecto_sql's [Anatomy of a Migration](https://hexdocs.pm/ecto_sql/migration_anatomy.html).
 
 To generate a migration, we'll run the `ekto` command:
@@ -72,7 +72,7 @@ $ pnpm ekto migrate
 
 Understanding exactly what SQL commands are running is helpful to ensure safe migrations, so how
 do we see the SQL that is executed? ekto does not log the SQL that migrations run, so we'll ask
-Postgres to log every statement it receives, for our development database only:
+PostgreSQL to log every statement it receives, for our development database only:
 
 ```sql
 ALTER DATABASE my_app_dev SET log_statement = 'all';
@@ -136,7 +136,7 @@ explore some of those options next.
 
 ## Migration options
 
-A typical migration has this structure (reminder: this guide is using Postgres; SQLite will vary):
+A typical migration has this structure (reminder: this guide is using PostgreSQL; SQLite will vary):
 
 ```sql
 BEGIN;
@@ -232,7 +232,7 @@ COMMIT;
 ```
 
 > [!TIP]
-> Ecto's guide has you also disable the migration lock for Postgres here, since that lock's
+> Ecto's guide has you also disable the migration lock for PostgreSQL here, since that lock's
 > transaction holds a snapshot that `CONCURRENTLY` waits for. ekto's lock transaction runs nothing
 > but `LOCK TABLE` and holds no snapshot, so you can keep the lock, and with it the protection
 > against multiple nodes running the same migration at the same exact time.
@@ -278,7 +278,7 @@ We can add one or more safeguards:
 1. Automatically cancel a statement if the lock is held for too long. There are two ways to do
    this:
    1. Apply to migrations. This can be done with a `lock_timeout` inside a transaction.
-   2. Apply to any statements. This can be done by setting a `lock_timeout` on a Postgres role.
+   2. Apply to any statements. This can be done by setting a `lock_timeout` on a PostgreSQL role.
 2. Automatically cancel statements that take too long. This is broader than #1 because it includes
    any statement, not just locks.
 
@@ -291,7 +291,7 @@ last more than n seconds. This way, when an unsafe migration sneaks in, it only 
 updates and writes (and possibly reads) for n seconds instead of indefinitely when the migration
 finishes.
 
-From the Postgres docs:
+From the PostgreSQL docs:
 
 > Abort any statement that waits longer than the specified amount of time while attempting to
 > acquire a lock on a table, index, row, or other database object. The time limit applies
@@ -321,7 +321,7 @@ SET LOCAL lock_timeout TO '5s';
 ```
 
 Let's move that to the start of the migration's transaction. Since this `lock_timeout` will be in
-a database transaction for Postgres, we will use `SET LOCAL lock_timeout` so that the
+a database transaction for PostgreSQL, we will use `SET LOCAL lock_timeout` so that the
 `lock_timeout` only alters this database transaction and not the session.
 
 You can set a lock timeout in every migration, as its first command:
@@ -455,16 +455,16 @@ ALTER ROLE myuser SET lock_timeout = '10s';
 ```
 
 If you have a different user that runs migrations, this could be a good option for that
-migration-specific Postgres user. The trade-off is that developers won't see this timeout as they
+migration-specific PostgreSQL user. The trade-off is that developers won't see this timeout as they
 write migrations and explore the call stack since database role settings are in the database
 which developers don't usually monitor.
 
 ### Statement timeout
 
-Another way to ensure safety is to configure your Postgres database with statement timeouts. These
+Another way to ensure safety is to configure your PostgreSQL database with statement timeouts. These
 timeouts apply to all statements, including migrations and the locks they obtain.
 
-From Postgres docs:
+From PostgreSQL docs:
 
 > Abort any statement that takes more than the specified amount of time. If
 > `log_min_error_statement` is set to `ERROR` or lower, the statement that timed out will also be
@@ -478,7 +478,7 @@ From Postgres docs:
 > when any query-related message (Parse, Bind, Execute, Describe) arrives, and it is canceled by
 > completion of an Execute or Sync message.
 
-You can specify this configuration for the Postgres user. For example:
+You can specify this configuration for the PostgreSQL user. For example:
 
 ```sql
 ALTER ROLE myuser SET statement_timeout = '10m';
@@ -520,7 +520,10 @@ export default migration({
   disableDdlTransaction: true,
   change(m) {
     // Drop any invalid index from a previous failed attempt
-    m.execute('DROP INDEX CONCURRENTLY IF EXISTS "posts_slug_index"', "");
+    m.execute(
+      'DROP INDEX CONCURRENTLY IF EXISTS "posts_slug_index"',
+      async () => {}, // nothing to restore
+    );
     m.create(index("posts", ["slug"], { concurrently: true }));
   },
 });

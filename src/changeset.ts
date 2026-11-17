@@ -1487,7 +1487,7 @@ export function uniqueConstraint(...args: unknown[]): unknown {
 /**
  * Turns a foreign key violation into an error (Ecto's
  * `foreign_key_constraint`): "does not exist". The default name is
- * `<table>_<field>_fkey`, as Postgres names them.
+ * `<table>_<field>_fkey`, as PostgreSQL names them.
  */
 export function foreignKeyConstraint<D extends object>(
   changeset: Changeset<D>,
@@ -1548,7 +1548,7 @@ export function checkConstraint(...args: unknown[]): unknown {
 
 /**
  * Turns an exclusion constraint violation into an error (Ecto's
- * `exclusion_constraint`, Postgres only): "violates an exclusion constraint".
+ * `exclusion_constraint`, PostgreSQL only): "violates an exclusion constraint".
  * The default name is `<table>_<field>_exclusion`.
  */
 export function exclusionConstraint<D extends object>(

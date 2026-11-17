@@ -9,7 +9,9 @@ group: How-To's
 ekto has no query language of its own: queries are [Kysely](https://kysely.dev) query builders,
 typed with the tables your schemas describe. This guide follows Ecto's
 [Dynamic queries](https://hexdocs.pm/ecto/dynamic-queries.html) and shows how its ideas map to
-Kysely. When building queries, we chain calls on `repo.kysely`:
+Kysely. The examples use PostgreSQL: on SQLite, `utc_datetime` columns are typed as ISO 8601
+strings, so you compare them with strings rather than `Date`s. When building queries, we chain
+calls on `repo.kysely`:
 
 ```ts
 repo.kysely

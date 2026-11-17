@@ -22,7 +22,7 @@ export type DriverValue<Select = unknown, Insert = Select> = {
 /**
  * How a driver represents each primitive type. `array` is the
  * representation of every array, or `"elements"` for drivers that return
- * arrays of their elements' representation (Postgres).
+ * arrays of their elements' representation (PostgreSQL).
  */
 export type DriverTypes = { readonly [K in BaseType]: DriverValue } & {
   readonly array: DriverValue | "elements";

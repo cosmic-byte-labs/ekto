@@ -77,7 +77,7 @@ export type KyselyDB<Schemas extends readonly AnySchema[]> = KyselyTables<
 >;
 
 const INTEGER = /^-?\d+$/;
-// `timestamp` text as Postgres writes it: "2026-01-02 10:30:00.123456",
+// `timestamp` text as PostgreSQL writes it: "2026-01-02 10:30:00.123456",
 // optionally with an offset ("+00", "+05:30").
 const TIMESTAMP =
   /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}(?::?\d{2})?)?$/i;
@@ -157,7 +157,7 @@ function dumpValue(type: PrimitiveType, value: unknown): unknown {
         ? Buffer.from(value.buffer, value.byteOffset, value.byteLength)
         : value;
     case "map":
-      // node-postgres would send a top-level array as a Postgres array.
+      // node-postgres would send a top-level array as a PostgreSQL array.
       return JSON.stringify(value);
     default:
       return value;

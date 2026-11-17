@@ -96,5 +96,5 @@ With the [test sandbox](../testing/testing-with-ekto.md), what the factories ins
 at the end of each test.
 
 By building the functionality we need on top of ekto's capabilities, we are able to extend and
-improve our factories on whatever way we desire, without being constrained to third-party
+improve our factories in whatever way we desire, without being constrained to third-party
 limitations.

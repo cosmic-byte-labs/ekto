@@ -110,7 +110,7 @@ export interface Adapter {
   ping?(connection: DatabaseConnection): Promise<void>;
   /**
    * Converts a value the driver returned into what the type loads (Ecto's
-   * adapter loaders), e.g. a Postgres `int8` string into a number. Never
+   * adapter loaders), e.g. a PostgreSQL `int8` string into a number. Never
    * called with `null`.
    */
   load(type: PrimitiveType, value: unknown): unknown;

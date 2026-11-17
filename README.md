@@ -42,7 +42,7 @@ transaction, migrations with an `ekto` command, and a test sandbox that rolls ba
 
 Guides that follow Ecto's own, in `guides/` and in the API docs (`pnpm docs:build`):
 
-- [Getting Started](guides/introduction/getting-started.md)
+- [Getting started](guides/introduction/getting-started.md)
 - How-To's: [Aggregates and subqueries](guides/howtos/aggregates-and-subqueries.md),
   [Constraints and upserts](guides/howtos/constraints-and-upserts.md),
   [Data mapping and validation](guides/howtos/data-mapping-and-validation.md),
@@ -362,8 +362,8 @@ if (!result.ok) traverseErrors(result.changeset); // { author_id: ["does not exi
 Unique and foreign key constraint names follow Ecto's conventions; pass `name` when yours differ.
 Check constraints always need a `name`. SQLite reports unique violations by column, which ekto
 maps to the conventional index name, and foreign key violations without a name, so on SQLite
-those are always thrown. A violation the
-changeset does not declare is thrown as `ConstraintError`.
+those are always thrown. A violation the changeset does not declare is thrown as
+`ConstraintError`.
 
 `optimisticLock(user, "lock_version")` makes updates and deletes match only while the version is
 unchanged, and throws `StaleEntryError` otherwise. `prepareChanges(cs, fn)` runs `fn` inside the
@@ -565,7 +565,7 @@ ekto gen.schemas              # write schemas for the tables of an existing data
 
 `migrate`, `rollback` and `status` start the Repo with a pool of 2 (`--pool-size N`). On
 PostgreSQL the migration lock holds one connection while another runs the migration, so a pool of
-one fails, as in Ecto. `migrationLock: "pgAdvisoryLock"` in the config takes a Postgres advisory
+one fails, as in Ecto. `migrationLock: "pgAdvisoryLock"` in the config takes a PostgreSQL advisory
 lock instead of locking the migrations table in a transaction, as Ecto's
 `migration_lock: :pg_advisory_lock`. Other options: `--config`, `--migrations`, `--no-lock`, and for
 `gen.schema` `--binary-id` (UUID keys, or `binaryId: true` in the config) and
@@ -669,7 +669,7 @@ const repo = createRepo<DB>({
 
 | Option          | Default                     | Meaning                                                                |
 | --------------- | --------------------------- | ---------------------------------------------------------------------- |
-| `poolSize`      | 10 (PostgreSQL), 5 (SQLite) | Connections the Repo keeps.                                            |
+| `poolSize`      | 10 (PostgreSQL), 5 (SQLite) | Connections the Repo keeps; 1 with SQLite's `node:sqlite` driver.      |
 | `queueTarget`   | 50                          | How long a query should wait for a connection, in ms.                  |
 | `queueInterval` | 2000                        | The window `queueTarget` is checked in, in ms.                         |
 | `idleInterval`  | 1000                        | How often idle connections are pinged, in ms.                          |
@@ -701,7 +701,7 @@ Needs Node 26 (24.3+ works) and pnpm 12. Notes for coding agents are in [AGENTS.
 pnpm install
 pnpm check                          # lint, typecheck, tests, build, API docs
 pnpm test                           # node --test over src/**/*.test.ts
-EKTO_PG_URL=postgres://… pnpm test  # also run the Repo tests against Postgres
+EKTO_PG_URL=postgres://… pnpm test  # also run the Repo tests against PostgreSQL
 pnpm format                         # Biome: fix formatting and lint
 pnpm docs:build                     # API docs and guides with TypeDoc, in docs/api
 ```

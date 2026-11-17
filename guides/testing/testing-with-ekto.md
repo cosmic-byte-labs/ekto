@@ -31,7 +31,7 @@ export const repo = createRepo<DB>({
 });
 ```
 
-Thereby, we configure the database connection for our test setup. In this case, we use a Postgres
+Thereby, we configure the database connection for our test setup. In this case, we use a PostgreSQL
 database, which the sandbox will wrap each test in a transaction of.
 
 Lastly, you need to set up the sandbox for your tests. You can enable it either for all the tests
