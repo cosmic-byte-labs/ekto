@@ -3,6 +3,15 @@
   "version": "0.0.0",
   "private": true,
   "description": "Ecto-inspired data layer for TypeScript: schemas, changesets, composable queries and a Repo as the only side-effecting boundary.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cosmic-byte-labs/ekto.git"
+  },
+  "homepage": "https://github.com/cosmic-byte-labs/ekto#readme",
+  "bugs": {
+    "url": "https://github.com/cosmic-byte-labs/ekto/issues"
+  },
   "type": "module",
   "packageManager": "pnpm@12.21.0",
   "engines": {
