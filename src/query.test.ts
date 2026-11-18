@@ -33,6 +33,7 @@ import {
   type RowOf,
 } from "./repo.ts";
 import { getMeta, type Infer, schema, t } from "./schema.ts";
+import { sql } from "./sql.ts";
 import { type KyselyDB, sqlite } from "./sqlite/index.ts";
 import { sandbox } from "./testing/index.ts";
 import type { Equal, Expect } from "./type-test.test-helper.ts";
@@ -458,6 +459,35 @@ function suite(
       assert.deepEqual(
         titles.map((row) => row.title),
         ["Ecto", "Elixir"],
+      );
+    });
+
+    test("toSql gives the SQL the Repo runs, without running it", async () => {
+      const p = /serial/i.test(idType) ? (n: number) => `$${n}` : () => "?";
+      const columns = `"q_posts"."id", "q_posts"."title", "q_posts"."user_id", "q_posts"."views"`;
+      const query = from(Post).where("title", "=", "Ecto").limit(1);
+      events.length = 0;
+      assert.deepEqual(repo.toSql(query), {
+        sql: `select ${columns} from "q_posts" where "title" = ${p(1)} limit ${p(2)}`,
+        params: ["Ecto", 1],
+      });
+      assert.equal(events.length, 0);
+      await repo.all(query);
+      assert.equal(events.at(-1)?.sql, repo.toSql(query).sql);
+      assert.ok(seen.includes(compileUnbound(query).queryId));
+
+      assert.match(
+        repo.toSql(Post).sql,
+        /^SELECT "id", "title", "user_id", "views" FROM "q_posts"$/,
+      );
+      assert.deepEqual(
+        repo.toSql(kysely.deleteFrom("q_posts").where("id", "=", 1)),
+        { sql: `delete from "q_posts" where "id" = ${p(1)}`, params: [1] },
+      );
+      assert.deepEqual(repo.toSql(sql`SELECT ${1} AS one`).params, [1]);
+      assert.throws(
+        () => repo.toSql(42 as never),
+        /Repo\.toSql expects a query/,
       );
     });
 

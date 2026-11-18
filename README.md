@@ -419,6 +419,9 @@ such as writes or `with`; their `execute()` throws, as they run only through a R
 compiles every query with its own dialect and `plugins`, and runs it on its connection: in a
 transaction, the transaction's, and in tests, the sandbox's.
 
+`repo.toSql(query)` gives the SQL and parameters of a query as the Repo would run it, without
+running it (Ecto's `Repo.to_sql`).
+
 A query can also be given with a schema, `repo.all(Post, query)`, which loads any query that
 selects every persisted column of the schema (otherwise a type error, and `SchemaMismatchError`
 at runtime), such as a `kysely.selectFrom("posts").selectAll()` or the `sql` tag's.

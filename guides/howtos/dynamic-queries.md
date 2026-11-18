@@ -159,13 +159,15 @@ structures, we can use all the tools available in TypeScript to work with data. 
 collect a list of conditions as we traverse the parameters, and `eb.and` of an empty list is true.
 
 Testing also becomes simpler, as each function can be tested on its own, and the query is data
-until a Repo runs it. In the [test sandbox](../testing/testing-with-ekto.md), we run it:
+until a Repo runs it: `repo.toSql` gives its SQL and parameters without running it.
 
 ```ts
-test("filter published at based on the given date", async () => {
-  const since = new Date("2010-04-17");
-  const posts = await repo.all(filter({ published_at: "2010-04-17" }));
-  assert.ok(posts.every((post) => post.published_at! > since));
+test("filter published at based on the given date", () => {
+  assert.match(repo.toSql(filter({})).sql, / where 1 = 1$/);
+  assert.deepEqual(repo.toSql(filter({ published_at: "2010-04-17" })), {
+    sql: 'select "posts"."id", "posts"."author", "posts"."author_id", "posts"."category", "posts"."published_at" from "posts" where "published_at" > $1',
+    params: [new Date("2010-04-17")],
+  });
 });
 ```
 

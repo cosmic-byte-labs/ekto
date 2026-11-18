@@ -4,9 +4,10 @@
  * leave the database as they found it.
  *
  * While a test's sandbox is active, the application's Repo (the one made by
- * `createRepo`, and its `kysely`) runs on the sandbox's transaction, so the
- * code under test needs no changes. Queries sent to the application's own
- * Kysely instance bypass ekto and the sandbox.
+ * `createRepo`, its `kysely`, and the queries of `queries()` it is given)
+ * runs on the sandbox's transaction, so the code under test needs no
+ * changes. Queries sent to the application's own Kysely instance bypass
+ * ekto and the sandbox.
  *
  * Ecto ties the sandbox's connection to the test process. ekto has two
  * modes, as Ecto does:

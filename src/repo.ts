@@ -555,6 +555,18 @@ export interface Repo<DB = any> {
   exec<Q extends Query>(query: Q): Promise<ExecResult<ExecRow<RowOf<Q>>>>;
 
   /**
+   * The SQL and parameters of a query, as this Repo would run it, with its
+   * dialect and plugins (Ecto's `Repo.to_sql/2`). It does not touch the
+   * database. Given a schema, the query is the one `all(schema)` runs.
+   *
+   * ```ts
+   * repo.toSql(from(Post).where("title", "=", "Ecto"));
+   * // { sql: 'select "posts"."id", … from "posts" where "title" = $1', params: ["Ecto"] }
+   * ```
+   */
+  toSql(query: AnySchema | Query): Queryable;
+
+  /**
    * Inserts many rows in one query (Ecto's `Repo.insert_all/3`). Values are
    * dumped through the field types but not cast or validated, and nothing
    * is generated (no timestamps). Constraint violations are thrown as
@@ -1674,6 +1686,13 @@ function bind<DB>(
     };
   }
 
+  function toSql(input: unknown): Queryable {
+    const compiled = isSchema(input)
+      ? compileQuery(selectSql(input, []), "toSql")
+      : compileQuery(input, "toSql");
+    return { sql: compiled.sql, params: [...compiled.parameters] };
+  }
+
   /** A read query as a subquery: its SQL without a trailing semicolon. */
   function subquery(input: unknown, fn: string): CompiledQuery {
     const compiled = compileRead(input, fn);
@@ -2122,6 +2141,7 @@ function bind<DB>(
     aggregate: aggregate as Repo["aggregate"],
     query: query as Repo["query"],
     exec: exec as Repo["exec"],
+    toSql: toSql as Repo["toSql"],
     insertAll: insertAll as Repo["insertAll"],
     updateAll: updateAll as Repo["updateAll"],
     deleteAll: deleteAll as Repo["deleteAll"],

@@ -624,13 +624,15 @@ await repo.all(from(Person).where("last_name", "=", "Smith"));
 ];
 ```
 
-The repo compiles the query to SQL when it runs it. If we log the queries it runs (the repo's
-`onQuery` option is called with the SQL and parameters of each one), we will see the SQL that is
-generated:
+The repo compiles the query to SQL when it runs it. To see the SQL without running the query,
+we can ask the repo with `repo.toSql`:
 
-```sql
-select "people"."id", "people"."first_name", "people"."last_name", "people"."age"
-from "people" where "last_name" = $1
+```ts
+repo.toSql(from(Person).where("last_name", "=", "Smith"));
+// {
+//   sql: 'select "people"."id", "people"."first_name", "people"."last_name", "people"."age" from "people" where "last_name" = $1',
+//   params: ["Smith"],
+// }
 ```
 
 The values given to `where` are always sent as parameters (`$1`), never written into the SQL,
