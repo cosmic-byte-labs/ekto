@@ -134,14 +134,14 @@ describe("sqlite adapter", () => {
 class User extends schema("users", {
   id: t.id(),
   email: t.string(),
-  admin: t.boolean().default(false),
-  score: t.decimal().nullable(),
-  tags: t.array(t.string().type).default([]),
-  settings: t.map().nullable(),
-  birthday: t.date().nullable(),
-  avatar: t.binary().nullable(),
-  token: t.uuid().autogenerate(),
-  age: t.integer().nullable(),
+  admin: t.boolean({ default: false }),
+  score: t.decimal({ nullable: true }),
+  tags: t.array(t.string, { default: [] }),
+  settings: t.map({ nullable: true }),
+  birthday: t.date({ nullable: true }),
+  avatar: t.binary({ nullable: true }),
+  token: t.uuid({ autogenerate: true }),
+  age: t.integer({ nullable: true }),
   ...t.timestamps(),
 }) {
   static associations = {

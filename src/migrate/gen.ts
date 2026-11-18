@@ -154,7 +154,7 @@ export function parseAttrs(
         throw new Error(`expected ${name}:array:<type>, e.g. array:string`);
       return {
         ...base,
-        field: `t.array(types.${known[0]})`,
+        field: `t.array(t.${known[0]})`,
         column: ["array", known[1]],
         columnSource: `["array", ${JSON.stringify(known[1])}]`,
       };
@@ -244,7 +244,6 @@ function renderSchema(
     "pipe",
     "schema",
     "t",
-    ...(fields.some((f) => f.source.includes("types.")) ? ["types"] : []),
     ...(unique.length > 0 ? ["uniqueConstraint"] : []),
     ...(required.length > 0 ? ["validateRequired"] : []),
   ];
@@ -285,7 +284,7 @@ export function schemaSource(spec: SchemaSpec): string {
   return renderSchema(spec.name, spec.table, [
     {
       source: spec.binaryId
-        ? "id: t.uuid().primaryKey().autogenerate()"
+        ? "id: t.uuid({ primaryKey: true, autogenerate: true })"
         : "id: t.id()",
     },
     ...spec.attrs.map((a) => ({
@@ -314,12 +313,21 @@ const FIELDS: Readonly<Record<string, string>> = {
   utc_datetime_msec: "utcDatetimeMsec",
 };
 
+/** `t.integer()` with options: `t.integer({ nullable: true })`. */
+function withOptions(field: string, options: readonly string[]): string {
+  if (options.length === 0) return field;
+  const config = `{ ${options.join(", ")} }`;
+  return field.endsWith("()")
+    ? `${field.slice(0, -1)}${config})`
+    : `${field.slice(0, -1)}, ${config})`;
+}
+
 /** The field of a column (`t.integer()`), or `undefined` for unknown types. */
 function fieldOf(type: ColumnType | undefined): string | undefined {
   if (type === undefined) return undefined;
   if (typeof type !== "string") {
     const inner = typeof type[1] === "string" ? FIELDS[type[1]] : undefined;
-    return inner === undefined ? undefined : `t.array(types.${inner})`;
+    return inner === undefined ? undefined : `t.array(t.${inner})`;
   }
   const field = FIELDS[type];
   return field === undefined ? undefined : `t.${field}()`;
@@ -327,7 +335,7 @@ function fieldOf(type: ColumnType | undefined): string | undefined {
 
 /**
  * The schema module of an existing table: its columns become fields,
- * nullable ones `.nullable()`; the changeset casts all but the primary key,
+ * nullable ones `{ nullable: true }`; the changeset casts all but the primary key,
  * foreign keys and timestamps, and requires the columns that are `NOT NULL`
  * without a default. Columns of unknown types become `t.any()`.
  */
@@ -370,15 +378,15 @@ export function tableSchemaSource(
       fields.push({ source: `${key}: t.id()` });
       continue;
     }
-    let field = fieldOf(c.type) ?? "t.any()";
-    if (c.primaryKey)
-      field += c.hasDefault
-        ? ".primaryKey().readAfterWrites()"
-        : c.type === "uuid"
-          ? ".primaryKey().autogenerate()"
-          : ".primaryKey()";
-    else if (c.hasDefault && !c.nullable) field += ".readAfterWrites()";
-    if (c.nullable) field += ".nullable()";
+    const options: string[] = [];
+    if (c.primaryKey) {
+      options.push("primaryKey: true");
+      if (c.hasDefault) options.push("readAfterWrites: true");
+      else if (c.type === "uuid") options.push("autogenerate: true");
+    } else if (c.hasDefault && !c.nullable)
+      options.push("readAfterWrites: true");
+    if (c.nullable) options.push("nullable: true");
+    const field = withOptions(fieldOf(c.type) ?? "t.any()", options);
     const comment = fieldOf(c.type) === undefined ? ` /* ${c.dbType} */` : "";
     const unique = table.uniqueIndexes.find((u) => u.column === c.name);
     const conventional = `${table.name}_${c.name}_index`;

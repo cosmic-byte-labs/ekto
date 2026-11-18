@@ -179,9 +179,9 @@ import { type Infer, schema, t } from "ekto";
 
 export const Person = schema("people", {
   id: t.id(),
-  first_name: t.string().nullable(),
-  last_name: t.string().nullable(),
-  age: t.integer().nullable(),
+  first_name: t.string({ nullable: true }),
+  last_name: t.string({ nullable: true }),
+  age: t.integer({ nullable: true }),
 });
 export type Person = Infer<typeof Person>;
 ```
@@ -191,7 +191,7 @@ ekto that the `Person` schema maps to the `people` table in the database, and th
 `first_name`, `last_name` and `age` fields in that table. The field types (`t.id()`,
 `t.string()`, `t.integer()`) tell ekto how we want the information from the database to be
 represented in our records. The columns of our table may be `NULL`, so the fields are
-`.nullable()`. `Infer` gives us the TypeScript type of a person.
+`{ nullable: true }`. `Infer` gives us the TypeScript type of a person.
 
 We've called this schema `Person` because the naming convention for schemas is a singularized
 name.

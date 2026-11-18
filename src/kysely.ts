@@ -43,7 +43,7 @@ type Nullable<V, N> = N extends true ? V | null : V;
 
 /**
  * The Kysely column type of a field. Nullable fields allow `null`; fields
- * the database generates (`t.id()`, `.readAfterWrites()`) may be left out of
+ * the database generates (`t.id()`, `readAfterWrites`) may be left out of
  * inserts, like Kysely's `Generated`.
  */
 export type KyselyColumn<F, D extends DriverTypes> =

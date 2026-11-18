@@ -12,7 +12,7 @@
  * class Post extends schema("posts", {
  *   id: t.id(),
  *   title: t.string(),
- *   author_id: t.integer().nullable(),
+ *   author_id: t.integer({ nullable: true }),
  * }) {
  *   static associations = {
  *     author: belongsTo(() => User),

@@ -49,15 +49,15 @@ import type { Equal, Expect } from "./type-test.test-helper.ts";
 const User = schema("users", {
   id: t.id(),
   email: t.string(),
-  name: t.string().nullable(),
-  age: t.integer().nullable(),
-  score: t.decimal().nullable(),
-  role: t.enum(["admin", "member"]).default("member"),
-  tags: t.array(t.string().type).default([]),
-  password: t.string().virtual(),
-  terms: t.boolean().virtual(),
-  lock_version: t.integer().default(1),
-  password_hash: t.string().redact(),
+  name: t.string({ nullable: true }),
+  age: t.integer({ nullable: true }),
+  score: t.decimal({ nullable: true }),
+  role: t.enum(["admin", "member"], { default: "member" }),
+  tags: t.array(t.string, { default: [] }),
+  password: t.string({ virtual: true }),
+  terms: t.boolean({ virtual: true }),
+  lock_version: t.integer({ default: 1 }),
+  password_hash: t.string({ redact: true }),
 });
 
 const loaded = () =>

@@ -62,7 +62,7 @@ export interface Type<T, P extends PrimitiveType = PrimitiveType> {
   /** Defaults to structural equality when left out. */
   equal?(a: T, b: T): boolean;
   /**
-   * Generates a value for fields declared with `.autogenerate()` (Ecto's
+   * Generates a value for fields declared with `autogenerate: true` (Ecto's
    * `autogenerate/0` callback), e.g. a new UUID.
    */
   autogenerate?(): T;

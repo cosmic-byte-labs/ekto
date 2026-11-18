@@ -259,7 +259,7 @@ Schema change to read the new column:
 
 ```diff
  export const Comment = schema("comments", {
-+  approved: t.boolean().default(false),
++  approved: t.boolean({ default: false }),
  });
 ```
 
@@ -392,7 +392,7 @@ First deployment:
  // First deploy, in the ekto schema
 
  export const Post = schema("posts", {
--  no_longer_needed_column: t.string().nullable(),
+-  no_longer_needed_column: t.string({ nullable: true }),
  });
 ```
 
@@ -495,10 +495,10 @@ Rename the schema only and all calling code, and don't rename the table:
 -export const Weather = schema("weather", {
 +export const Forecast = schema("weather", {
    id: t.id(),
-   temp_lo: t.integer().nullable(),
-   temp_hi: t.integer().nullable(),
-   prcp: t.float().nullable(),
-   city: t.string().nullable(),
+   temp_lo: t.integer({ nullable: true }),
+   temp_hi: t.integer({ nullable: true }),
+   prcp: t.float({ nullable: true }),
+   city: t.string({ nullable: true }),
  });
 
  // and in calling code:

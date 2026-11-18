@@ -42,7 +42,7 @@ describe("parseAttrs (mix phx.gen.schema attributes)", () => {
         ["email", "t.string()", '"string"', true],
         ["slug", "t.string()", '"string"', true],
         ["body", "t.string()", '"text"', false],
-        ["tags", "t.array(types.string)", '["array", "string"]', false],
+        ["tags", "t.array(t.string)", '["array", "string"]', false],
         ["status", 't.enum(["draft", "published"])', '"string"', false],
         ["user_id", "t.integer()", 'references("users")', false],
       ],
@@ -438,8 +438,8 @@ function fromDatabase(
         "utf8",
       );
       assert.match(source, /id: t\.id\(\),/);
-      assert.match(source, /nickname: t\.string\(\)\.nullable\(\),/);
-      assert.match(source, /role: t\.string\(\)\.readAfterWrites\(\),/);
+      assert.match(source, /nickname: t\.string\(\{ nullable: true \}\),/);
+      assert.match(source, /role: t\.string\(\{ readAfterWrites: true \}\),/);
       assert.match(source, /\.\.\.t\.timestamps\(\),/);
       assert.match(
         source,

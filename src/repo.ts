@@ -123,7 +123,7 @@ export type WriteResult<D extends object, V = D> =
 interface ReturningOptions<D> {
   /**
    * Fields to read back from the database after the write: `true` for all
-   * of them (Ecto's `:returning`). Fields marked `.readAfterWrites()` are
+   * of them (Ecto's `:returning`). Fields with `readAfterWrites` are
    * always read back.
    */
   readonly returning?: boolean | readonly (keyof D & string)[];

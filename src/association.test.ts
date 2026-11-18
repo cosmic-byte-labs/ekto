@@ -28,7 +28,7 @@ class User extends schema("users", {
 class Post extends schema("posts", {
   id: t.id(),
   title: t.string(),
-  author_id: t.integer().nullable(),
+  author_id: t.integer({ nullable: true }),
 }) {
   static associations = {
     author: belongsTo(() => User),
@@ -208,7 +208,7 @@ describe("association reflection", () => {
         () =>
           class extends schema("a", {
             id: t.id(),
-            password: t.string().virtual(),
+            password: t.string({ virtual: true }),
           }) {
             static associations = {
               posts: hasMany(() => Post, {

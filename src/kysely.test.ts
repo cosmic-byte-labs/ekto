@@ -19,18 +19,18 @@ import type { Equal, Expect } from "./type-test.test-helper.ts";
 const User = schema("users", {
   id: t.id(),
   email: t.string(),
-  name: t.string().nullable(),
-  active: t.boolean().default(true),
-  score: t.decimal().nullable(),
+  name: t.string({ nullable: true }),
+  active: t.boolean({ default: true }),
+  score: t.decimal({ nullable: true }),
   tags: t.array(integer),
-  born_on: t.date().nullable(),
-  password: t.string().virtual(),
-  version: t.integer().readAfterWrites(),
+  born_on: t.date({ nullable: true }),
+  password: t.string({ virtual: true }),
+  version: t.integer({ readAfterWrites: true }),
   ...t.timestamps(),
 });
 
 const Post = schema("posts", {
-  id: t.uuid().primaryKey().autogenerate(),
+  id: t.uuid({ primaryKey: true, autogenerate: true }),
   title: t.string(),
   author_id: t.integer(),
 });

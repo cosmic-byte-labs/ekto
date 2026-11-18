@@ -56,8 +56,8 @@ import { type Infer, manyToMany, schema, t } from "ekto";
 
 export class Post extends schema("posts", {
   id: t.id(),
-  title: t.string().nullable(),
-  body: t.string().nullable(),
+  title: t.string({ nullable: true }),
+  body: t.string({ nullable: true }),
   ...t.timestamps(),
 }) {
   static associations = {

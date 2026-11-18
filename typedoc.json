@@ -77,6 +77,7 @@
     "src/repo.ts:TableOf",
     "src/repo.ts:WithPreloads",
     "src/schema.ts:FieldValue",
+    "src/schema.ts:IdFlags",
     "src/schema.ts:InsertedField",
     "src/schema.ts:LoadedValue",
     "src/schema.ts:NewValue",

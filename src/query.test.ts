@@ -48,9 +48,9 @@ const Post = schema("q_posts", {
   id: t.id(),
   title: t.string(),
   user_id: t.integer(),
-  views: t.integer().default(0),
-  draft: t.boolean().virtual(),
-  score: t.integer().virtual(),
+  views: t.integer({ default: 0 }),
+  draft: t.boolean({ virtual: true }),
+  score: t.integer({ virtual: true }),
 });
 
 const Other = schema("q_others", { id: t.id() });

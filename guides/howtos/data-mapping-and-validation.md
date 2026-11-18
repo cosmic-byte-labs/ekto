@@ -43,8 +43,8 @@ One approach would be to have two schemas, `Account` and `Profile`, with virtual
 export const Profile = schema("profiles", {
   id: t.id(),
   name: t.string(),
-  first_name: t.string().virtual(),
-  last_name: t.string().virtual(),
+  first_name: t.string({ virtual: true }),
+  last_name: t.string({ virtual: true }),
   // ...
 });
 ```

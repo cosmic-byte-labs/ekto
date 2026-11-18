@@ -33,7 +33,7 @@ class User extends schema("pl_users", { id: t.id(), email: t.string() }) {
 class Post extends schema("pl_posts", {
   id: t.id(),
   title: t.string(),
-  author_id: t.integer().nullable(),
+  author_id: t.integer({ nullable: true }),
 }) {
   static associations = {
     author: belongsTo(() => User),
