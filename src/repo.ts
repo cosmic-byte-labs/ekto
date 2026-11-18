@@ -79,6 +79,14 @@ import {
   preload,
 } from "./preloader.ts";
 import {
+  bindQuery,
+  isUnboundQuery,
+  type SchemaRow,
+  schemaOfQuery,
+  type UnboundQuery,
+  type Unmarked,
+} from "./query.ts";
+import {
   type AnyField,
   type AnySchema,
   type FieldName,
@@ -237,7 +245,10 @@ const AGGREGATES: ReadonlySet<string> = new Set([
 ]);
 
 /** The row type of a query; untyped queries give `Record<string, unknown>`. */
-export type RowOf<Q> = RowType<
+export type RowOf<Q> = Unmarked<RowType<MarkedRowOf<Q>>>;
+type RowType<R> = unknown extends R ? Record<string, unknown> : R;
+/** The row type of a query, with the `SchemaRow` mark of a `from(Schema)` query. */
+type MarkedRowOf<Q> =
   Q extends Sql<infer R>
     ? R
     : Q extends RawBuilder<infer R>
@@ -248,9 +259,19 @@ export type RowOf<Q> = RowType<
           ? R
           : Q extends Queryable<infer R>
             ? R
-            : unknown
->;
-type RowType<R> = unknown extends R ? Record<string, unknown> : R;
+            : unknown;
+
+/**
+ * What `Repo.all(query)` gives for each row of a query: a record of the
+ * schema for a `from(Schema)` query, else the row (`RowOf`).
+ */
+export type ResultOf<Q> =
+  IsAny<MarkedRowOf<Q>> extends true
+    ? RowOf<Q>
+    : [MarkedRowOf<Q>] extends [SchemaRow<infer S extends AnySchema>]
+      ? Infer<S>
+      : RowOf<Q>;
+type IsAny<T> = 0 extends 1 & T ? true : false;
 
 /**
  * Type check for `Repo.all(Schema, query)`: a typed query must select every
@@ -333,7 +354,10 @@ export interface RepoConfig extends ConnectionOptions {
    * when it is checked in.
    */
   readonly maxLifetime?: readonly [number, number];
-  /** Kysely plugins for `repo.kysely`, e.g. `ParseJSONResultsPlugin`. */
+  /**
+   * Kysely plugins for `repo.kysely` and the queries of `queries()` this
+   * Repo runs, e.g. `ParseJSONResultsPlugin`.
+   */
   readonly plugins?: readonly KyselyPlugin[];
   /** Called after every query ekto runs, e.g. for logging. */
   readonly onQuery?: (event: QueryEvent) => void;
@@ -438,15 +462,16 @@ export interface Repo<DB = any> {
    * Fetches all records of a schema (Ecto's `Repo.all/2`). With a query,
    * its rows are loaded through the schema; they must contain every
    * persisted column (else `SchemaMismatchError`), and other columns are
-   * dropped. Without a schema, the rows are returned as the driver gives
-   * them. Writes are rejected; use `exec`.
+   * dropped. Without a schema, a `from(Schema)` query (see `queries`) is
+   * loaded through its schema, and the rows of other queries are returned
+   * as the driver gives them. Writes are rejected; use `exec`.
    */
   all<S extends AnySchema>(schema: S): Promise<Infer<S>[]>;
   all<S extends AnySchema, Q extends Query>(
     schema: S,
     query: SchemaQuery<S, Q>,
   ): Promise<Infer<S>[]>;
-  all<Q extends Query>(query: Q): Promise<RowOf<Q>[]>;
+  all<Q extends Query>(query: Q): Promise<ResultOf<Q>[]>;
 
   /**
    * Like `all`, but returns one record (or row) or `null`, and throws
@@ -457,14 +482,14 @@ export interface Repo<DB = any> {
     schema: S,
     query: SchemaQuery<S, Q>,
   ): Promise<Infer<S> | null>;
-  one<Q extends Query>(query: Q): Promise<RowOf<Q> | null>;
+  one<Q extends Query>(query: Q): Promise<ResultOf<Q> | null>;
   /** Like `one`, but throws `NoResultsError` instead of returning `null`. */
   oneOrThrow<S extends AnySchema>(schema: S): Promise<Infer<S>>;
   oneOrThrow<S extends AnySchema, Q extends Query>(
     schema: S,
     query: SchemaQuery<S, Q>,
   ): Promise<Infer<S>>;
-  oneOrThrow<Q extends Query>(query: Q): Promise<RowOf<Q>>;
+  oneOrThrow<Q extends Query>(query: Q): Promise<ResultOf<Q>>;
 
   /**
    * Whether a schema's table, or a query, has any rows (Ecto's
@@ -1509,30 +1534,64 @@ function bind<DB>(
   };
 
   function compileQuery(query: unknown, fn: string): CompiledQuery {
+    return compile(query, fn).compiled;
+  }
+
+  /**
+   * Compiles a query, and gives the schema a `from(Schema)` query loads.
+   * Queries of `queries()` are compiled here, with this Repo's Kysely
+   * instance, so its dialect and plugins apply.
+   */
+  function compile(
+    query: unknown,
+    fn: string,
+  ): { compiled: CompiledQuery; schema?: AnySchema } {
     if (query instanceof Sql) {
       const { sql: text, params } = query.compile(adapter.syntax);
-      return CompiledQuery.raw(text, [...params]);
+      return { compiled: CompiledQuery.raw(text, [...params]) };
     }
-    if (isCompiledQuery(query)) return query;
-    if (isRawBuilder(query)) return query.compile(executor.db);
-    if (isCompilable(query)) return query.compile();
+    if (isUnboundQuery(query)) return bound(query);
+    if (isCompiledQuery(query)) return { compiled: query };
+    if (isRawBuilder(query)) return { compiled: query.compile(executor.db) };
+    if (isCompilable(query)) {
+      const compiled: unknown = query.compile();
+      return isUnboundQuery(compiled)
+        ? bound(compiled)
+        : { compiled: compiled as CompiledQuery };
+    }
     if (isQueryable(query))
-      return CompiledQuery.raw(query.sql, [...query.params]);
+      return { compiled: CompiledQuery.raw(query.sql, [...query.params]) };
     throw new TypeError(
       `Repo.${fn} expects a query ({ sql, params }, sql\`…\` or a Kysely query), got: ${inspect(query)}`,
     );
   }
 
+  function bound(query: UnboundQuery): {
+    compiled: CompiledQuery;
+    schema?: AnySchema;
+  } {
+    const compiled = bindQuery(query, executor.db);
+    const schema = schemaOfQuery(query);
+    return schema === undefined ? { compiled } : { compiled, schema };
+  }
+
   /** Compiles a query that must not write (Repo.all/one/query). */
   function compileRead(query: unknown, fn: string): CompiledQuery {
-    const compiled = compileQuery(query, fn);
-    const write = writeKinds[compiled.query.kind];
+    return compileReadWithSchema(query, fn).compiled;
+  }
+
+  function compileReadWithSchema(
+    query: unknown,
+    fn: string,
+  ): { compiled: CompiledQuery; schema?: AnySchema } {
+    const result = compile(query, fn);
+    const write = writeKinds[result.compiled.query.kind];
     if (write !== undefined) {
       throw new TypeError(
         `Repo.${fn} was given a Kysely ${write} query; run writes with Repo.exec`,
       );
     }
-    return compiled;
+    return result;
   }
 
   async function allRows(
@@ -1547,9 +1606,12 @@ function bind<DB>(
           `Repo.${fn} expects a schema as its first argument when given a query, got: ${inspect(first)}`,
         );
       }
-      const compiled = compileRead(first, fn);
-      const { rows } = await executor.execute(compiled);
-      return { rows, sql: compiled.sql };
+      const { compiled, schema } = compileReadWithSchema(first, fn);
+      const { rows } = await executor.execute(compiled, schema?.source);
+      return {
+        rows: schema ? rows.map((row) => loadRow(schema, row)) : rows,
+        sql: compiled.sql,
+      };
     }
     const compiled = hasQuery
       ? compileRead(second, fn)

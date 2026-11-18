@@ -37,7 +37,7 @@ import type {
   InsertOptions,
   Query,
   Repo,
-  RowOf,
+  ResultOf,
   SchemaQuery,
   UpdateAll,
   UpdateOptions,
@@ -300,7 +300,7 @@ export class Multi<DB = any, C extends Changes = {}> {
   all<N extends string, Q extends Query>(
     name: N,
     query: Q | ((changes: C) => Q),
-  ): Multi<DB, Add<C, N, RowOf<Q>[]>>;
+  ): Multi<DB, Add<C, N, ResultOf<Q>[]>>;
   all(name: string, ...args: [unknown] | [unknown, unknown]): Multi<DB, C> {
     return this.#add(name, read("all", args));
   }
@@ -321,7 +321,7 @@ export class Multi<DB = any, C extends Changes = {}> {
   one<N extends string, Q extends Query>(
     name: N,
     query: Q | ((changes: C) => Q),
-  ): Multi<DB, Add<C, N, RowOf<Q> | null>>;
+  ): Multi<DB, Add<C, N, ResultOf<Q> | null>>;
   one(name: string, ...args: [unknown] | [unknown, unknown]): Multi<DB, C> {
     return this.#add(name, read("one", args));
   }

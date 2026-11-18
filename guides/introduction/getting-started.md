@@ -30,7 +30,7 @@ ekto builds its queries with, and `pg` (node-postgres), the driver that talks to
 ekto is not on the npm registry; it comes from the tarball of its GitHub release:
 
 ```bash
-npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely pg
+npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.1.0/ekto-1.1.0.tgz kysely pg
 ```
 
 (This guide uses npm; pnpm, yarn and bun work just as well.)
@@ -200,7 +200,7 @@ Now that we have a schema, we can let the repo know about our tables, so that it
 typed. Let's change `src/repo.ts` to:
 
 ```ts
-import { createRepo } from "ekto";
+import { createRepo, queries } from "ekto";
 import { type KyselyDB, postgres } from "ekto/postgres";
 import { Person } from "./person.ts";
 
@@ -210,7 +210,12 @@ export const repo = createRepo<DB>({
   adapter: postgres(),
   url: process.env.DATABASE_URL,
 });
+
+export const { from, kysely } = queries<DB>();
 ```
+
+The last line gives us the query builders of our database, `from` and `kysely`, which we'll use
+when [querying](#fetching-a-single-record).
 
 We can play around with this schema in a script. Records are plain objects; `Person.new()`
 builds one, with `null` (or the field's default) for all the fields:
@@ -519,22 +524,19 @@ We'll be querying for these people in this section. Let's jump in!
 ### Fetching a single record
 
 ekto has no query language of its own: queries are [Kysely](https://kysely.dev) query builders,
-which `repo.kysely` starts, typed with our `DB`. Let's start off with fetching just one record
-from our `people` table:
+which `from` (from `src/repo.ts`) starts, typed with our `DB`. Let's start off with fetching just
+one record from our `people` table:
 
 ```ts
-const query = repo.kysely
-  .selectFrom("people")
-  .selectAll()
-  .orderBy("id")
-  .limit(1);
+const query = from(Person).orderBy("id").limit(1);
 ```
 
-To execute the query that we've just constructed, we can call `repo.one`, with the schema to
-load the rows as:
+`from(Person)` selects the fields of `Person` from its table, `people`. Like an Ecto query, the
+query is only data: it does not touch the database until we give it to the repo. To execute the
+query that we've just constructed, we can call `repo.one`:
 
 ```ts
-await repo.one(Person, query);
+await repo.one(query);
 // { id: 1, first_name: "Ryan", last_name: "Bigg", age: 28 }
 ```
 
@@ -543,10 +545,7 @@ The `one` function retrieves just one record from our database and returns it as
 Similarly, ordering the other way gives us the last person:
 
 ```ts
-await repo.one(
-  Person,
-  repo.kysely.selectFrom("people").selectAll().orderBy("id", "desc").limit(1),
-);
+await repo.one(from(Person).orderBy("id", "desc").limit(1));
 // { id: 3, first_name: "Jane", last_name: "Smith", age: 26 }
 ```
 
@@ -615,10 +614,7 @@ await repo.getBy(Person, { first_name: "Ryan" });
 If we want to get multiple records matching a specific attribute, we can use `where`:
 
 ```ts
-await repo.all(
-  Person,
-  repo.kysely.selectFrom("people").selectAll().where("last_name", "=", "Smith"),
-);
+await repo.all(from(Person).where("last_name", "=", "Smith"));
 ```
 
 ```ts
@@ -628,15 +624,13 @@ await repo.all(
 ];
 ```
 
-If we compile the query instead of running it, we will see the SQL that is generated:
+The repo compiles the query to SQL when it runs it. If we log the queries it runs (the repo's
+`onQuery` option is called with the SQL and parameters of each one), we will see the SQL that is
+generated:
 
-```ts
-repo.kysely
-  .selectFrom("people")
-  .selectAll()
-  .where("last_name", "=", "Smith")
-  .compile().sql;
-// select * from "people" where "last_name" = $1
+```sql
+select "people"."id", "people"."first_name", "people"."last_name", "people"."age"
+from "people" where "last_name" = $1
 ```
 
 The values given to `where` are always sent as parameters (`$1`), never written into the SQL,
@@ -644,13 +638,7 @@ which protects against SQL injection. That's also why we can use variables freel
 
 ```ts
 const lastName = "Smith";
-await repo.all(
-  Person,
-  repo.kysely
-    .selectFrom("people")
-    .selectAll()
-    .where("last_name", "=", lastName),
-);
+await repo.all(from(Person).where("last_name", "=", lastName));
 ```
 
 ### Composing queries
@@ -660,10 +648,7 @@ existing queries. For instance, if we want to find all people with the last name
 do:
 
 ```ts
-let query = repo.kysely
-  .selectFrom("people")
-  .selectAll()
-  .where("last_name", "=", "Smith");
+let query = from(Person).where("last_name", "=", "Smith");
 ```
 
 If we want to scope this down further to only people with the first name of "Jane", we can do
@@ -676,7 +661,8 @@ query = query.where("first_name", "=", "Jane");
 Our query will now have two `where` clauses in it:
 
 ```sql
-select * from "people" where "last_name" = $1 and "first_name" = $2
+select "people"."id", "people"."first_name", "people"."last_name", "people"."age"
+from "people" where "last_name" = $1 and "first_name" = $2
 ```
 
 This can be useful if you want to do something with the first query, and then build off that
@@ -692,10 +678,7 @@ Let's fetch the first person from our database and change their age. First, we'l
 person:
 
 ```ts
-const person = await repo.oneOrThrow(
-  Person,
-  repo.kysely.selectFrom("people").selectAll().orderBy("id").limit(1),
-);
+const person = await repo.oneOrThrow(from(Person).orderBy("id").limit(1));
 ```
 
 Next, we'll build a changeset. We need to build a changeset because if we just create a new
@@ -782,14 +765,14 @@ will be `true`, but if it fails then it will be `false`.
 To follow this guide with SQLite instead of PostgreSQL, install `sqlite3` instead of `pg`:
 
 ```bash
-npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely sqlite3
+npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.1.0/ekto-1.1.0.tgz kysely sqlite3
 ```
 
 and use the SQLite adapter, with the path of the database file, in `src/repo.ts` and
 `ekto.config.ts`:
 
 ```ts
-import { createRepo } from "ekto";
+import { createRepo, queries } from "ekto";
 import { type KyselyDB, sqlite } from "ekto/sqlite";
 import { Person } from "./person.ts";
 
@@ -799,6 +782,8 @@ export const repo = createRepo<DB>({
   adapter: sqlite(),
   database: "friends.db",
 });
+
+export const { from, kysely } = queries<DB>();
 ```
 
 SQLite creates the database file when it first connects, so there is no `createdb`; to re-create

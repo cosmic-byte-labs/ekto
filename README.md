@@ -82,14 +82,14 @@ Guides that follow Ecto's own, in `guides/` and in the API docs (`pnpm docs:buil
 
 ekto runs on Node 24.3 or later, and needs `kysely` and the driver of your database. ekto itself
 comes from the tarball of a [GitHub release](https://github.com/cosmic-byte-labs/ekto/releases)
-(change `1.0.0` in the URL for another version).
+(change `1.1.0` in the URL for another version).
 
 ```bash
 # PostgreSQL
-npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely pg
+npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.1.0/ekto-1.1.0.tgz kysely pg
 
 # SQLite
-npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely sqlite3
+npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.1.0/ekto-1.1.0.tgz kysely sqlite3
 ```
 
 The docs use npm; pnpm, yarn and bun work the same way (`pnpm add`, `yarn add` or `bun add`, and
@@ -144,7 +144,7 @@ Create a Repo:
 
 ```ts
 // src/repo.ts
-import { createRepo } from "ekto";
+import { createRepo, queries } from "ekto";
 import { type KyselyDB, postgres } from "ekto/postgres";
 import { User } from "./schemas/user.ts";
 
@@ -155,6 +155,9 @@ export const repo = createRepo<DB>({
   url: process.env.DATABASE_URL,
   poolSize: 10,
 });
+
+// The query builders of this database; see Queries.
+export const { from, kysely } = queries<DB>();
 ```
 
 Insert a record and read it back:
@@ -378,23 +381,47 @@ write's transaction, with `changeset.repo` set.
 
 ## Queries
 
-ekto has no query language of its own. Queries are Kysely builders on `repo.kysely`, which is
-typed with your `DB`. Pass one to the Repo with a schema and the rows are loaded as records:
+ekto has no query language of its own. Queries are [Kysely](https://kysely.dev) builders, typed
+with your `DB`, which `queries<DB>()` gives once, beside the Repo:
 
 ```ts
-const query = repo.kysely
-  .selectFrom("posts")
-  .selectAll()
+export const { from, kysely } = queries<DB>();
+```
+
+As in Ecto, a query is data: it belongs to no Repo, and runs when given to one. `from(Post)`
+selects the persisted columns of `Post` from its table, and the Repo loads its rows as records:
+
+```ts
+const query = from(Post)
   .where("status", "=", "published")
   .orderBy("inserted_at", "desc")
   .limit(10);
 
-const posts = await repo.all(Post, query); // Post[]
-const first = await repo.one(Post, query.limit(1)); // Post | null
+const posts = await repo.all(query); // Post[]
+const first = await repo.one(query.limit(1)); // Post | null
 ```
 
-A schema query must select every persisted column of the schema (a type error, and
-`SchemaMismatchError` at runtime). Without a schema, rows are returned as the driver gives them.
+The columns are qualified with the table (`posts.id, posts.title, …`), so joins keep the
+schema's columns. A query that selects something else is a query of plain rows, returned as the
+driver gives them: `from("posts")` (Kysely's `selectFrom`, of a table, an alias such as
+`"posts as p"` or a subquery, selecting nothing yet), or `from(Post)` after `clearSelect()`:
+
+```ts
+const counts = await repo.all(
+  from("posts")
+    .select(["status", (eb) => eb.fn.countAll().as("count")])
+    .groupBy("status"),
+); // { status: string; count: string | number | bigint }[]
+```
+
+`kysely` is a Kysely instance without a database, for queries that do not start with a select,
+such as writes or `with`; their `execute()` throws, as they run only through a Repo. The Repo
+compiles every query with its own dialect and `plugins`, and runs it on its connection: in a
+transaction, the transaction's, and in tests, the sandbox's.
+
+A query can also be given with a schema, `repo.all(Post, query)`, which loads any query that
+selects every persisted column of the schema (otherwise a type error, and `SchemaMismatchError`
+at runtime), such as a `kysely.selectFrom("posts").selectAll()` or the `sql` tag's.
 
 Queries compose as functions, which Kysely's `$call` applies:
 
@@ -409,14 +436,12 @@ const byAuthor =
     q.where("author_id", "=", authorId);
 
 const mine = await repo.all(
-  Post,
-  repo.kysely
-    .selectFrom("posts")
-    .selectAll()
-    .$call(published)
-    .$call(byAuthor(user.id)),
+  from(Post).$call(published).$call(byAuthor(user.id)),
 );
 ```
+
+`repo.kysely` is the Kysely instance the Repo runs on (a transaction's, in a transaction), for
+what the Repo does not run itself, such as Kysely's `execute()` or its schema builder.
 
 ekto's `sql` tag binds every interpolated value as a parameter and works on both databases:
 
@@ -432,8 +457,8 @@ const users = await repo.all(
 );
 ```
 
-`repo.query(q)` returns rows and a row count, and `repo.exec(q)` runs a write such as a Kysely
-`deleteFrom`, bypassing changesets. `repo.all` and `repo.query` reject writes.
+`repo.query(q)` returns rows and a row count, and `repo.exec(q)` runs a write such as
+`kysely.deleteFrom("posts")`, bypassing changesets. `repo.all` and `repo.query` reject writes.
 
 ## Preloads
 
@@ -682,7 +707,7 @@ const repo = createRepo<DB>({
 | `idleInterval`  | 1000                        | How often idle connections are pinged, in ms.                          |
 | `idleLimit`     | `poolSize`                  | How many idle connections are pinged per interval.                     |
 | `maxLifetime`   | none                        | `[min, max]` ms after which a connection is closed and replaced.       |
-| `plugins`       |                             | Kysely plugins for `repo.kysely`.                                      |
+| `plugins`       |                             | Kysely plugins for `repo.kysely` and the queries the Repo runs.        |
 | `onQuery`       |                             | Called after every query with its SQL, params, duration and any error. |
 
 As in Ecto's DBConnection, when every checkout in a `queueInterval` waits longer than

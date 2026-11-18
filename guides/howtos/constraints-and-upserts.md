@@ -82,7 +82,8 @@ database.
 
 ekto does not write associations through the parent's changeset (Ecto's `put_assoc` and
 `cast_assoc`): we insert the post, get or insert each tag, and then insert the rows of the join
-table. Let's write a function that does that:
+table, with `kysely`, the Kysely instance of `queries<DB>()` defined beside the repo
+(`export const { from, kysely } = queries<DB>();`). Let's write a function that does that:
 
 ```ts
 export async function createPost(params: {
@@ -96,7 +97,7 @@ export async function createPost(params: {
   const tags = await parseTags(params.tags);
   if (tags.length > 0)
     await repo.exec(
-      repo.kysely
+      kysely
         .insertInto("posts_tags")
         .values(tags.map((tag) => ({ post_id: post.id, tag_id: tag.id }))),
     );
@@ -253,10 +254,7 @@ async function insertAndGetAll(names: string[]) {
     names.map((name) => ({ name, inserted_at: now, updated_at: now })),
     { onConflict: "nothing" },
   );
-  return repo.all(
-    Tag,
-    repo.kysely.selectFrom("tags").selectAll().where("name", "in", names),
-  );
+  return repo.all(from(Tag).where("name", "in", names));
 }
 ```
 

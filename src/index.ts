@@ -70,6 +70,13 @@ export {
 } from "./multi.ts";
 export type { PreloadOptions } from "./preloader.ts";
 export {
+  type From,
+  type FromQuery,
+  type Queries,
+  queries,
+  type SchemaRow,
+} from "./query.ts";
+export {
   type Aggregate,
   createRepo,
   type DeleteOptions,
@@ -85,6 +92,7 @@ export {
   type Repo,
   type RepoConfig,
   type ResolvedRepoConfig,
+  type ResultOf,
   type RowOf,
   type SchemaQuery,
   type UpdateAll,

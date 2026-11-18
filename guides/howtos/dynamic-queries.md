@@ -10,13 +10,18 @@ ekto has no query language of its own: queries are [Kysely](https://kysely.dev) 
 typed with the tables your schemas describe. This guide follows Ecto's
 [Dynamic queries](https://hexdocs.pm/ecto/dynamic-queries.html) and shows how its ideas map to
 Kysely. The examples use PostgreSQL: on SQLite, `utc_datetime` columns are typed as ISO 8601
-strings, so you compare them with strings rather than `Date`s. When building queries, we chain
-calls on `repo.kysely`:
+strings, so you compare them with strings rather than `Date`s. The examples start their queries
+with `from`, defined beside the repo:
 
 ```ts
-repo.kysely
-  .selectFrom("posts")
-  .selectAll()
+// src/repo.ts
+export const { from, kysely } = queries<DB>();
+```
+
+`from(Post)` selects the columns of the `Post` schema from its table, and we chain calls on it:
+
+```ts
+from(Post)
   .where("author", "=", "José")
   .where("category", "=", "Elixir")
   .where("published_at", ">", minimumDate)
@@ -29,7 +34,7 @@ with Kysely's `$call`:
 
 ```ts
 import type { SelectQueryBuilder } from "kysely";
-import type { DB } from "./repo.ts";
+import { type DB, from, repo } from "./repo.ts";
 
 function mostRecentFrom<O>(minimumDate: Date) {
   return (query: SelectQueryBuilder<DB, "posts", O>) =>
@@ -38,13 +43,7 @@ function mostRecentFrom<O>(minimumDate: Date) {
       .orderBy("published_at", "desc");
 }
 
-await repo.all(
-  Post,
-  repo.kysely
-    .selectFrom("posts")
-    .selectAll()
-    .$call(mostRecentFrom(minimumDate)),
-);
+await repo.all(from(Post).$call(mostRecentFrom(minimumDate)));
 ```
 
 The examples above show you can build and compose queries at a high-level: by composing each call
@@ -58,9 +57,7 @@ criteria, such as the author name, the post category, publishing interval, etc.
 Each call returns a new query, so a query can be refined conditionally, as ordinary code:
 
 ```ts
-let query = repo.kysely
-  .selectFrom("posts")
-  .selectAll()
+let query = from(Post)
   .where("author", "=", "José")
   .where("category", "=", "Elixir")
   .orderBy("published_at", "desc");
@@ -72,12 +69,9 @@ if (params.published_at !== undefined)
 Kysely's `$if` does the same inside the chain:
 
 ```ts
-repo.kysely
-  .selectFrom("posts")
-  .selectAll()
-  .$if(params.published_at !== undefined, (q) =>
-    q.where("published_at", "<", params.published_at!),
-  );
+from(Post).$if(params.published_at !== undefined, (q) =>
+  q.where("published_at", "<", params.published_at!),
+);
 ```
 
 ## Dynamic expressions
@@ -92,9 +86,7 @@ For example, imagine that in the example above you may optionally filter posts b
 publication:
 
 ```ts
-repo.kysely
-  .selectFrom("posts")
-  .selectAll()
+from(Post)
   .where((eb) =>
     params.published_at !== undefined
       ? eb("published_at", "<", params.published_at)
@@ -122,9 +114,7 @@ import type { ExpressionBuilder, SelectQueryBuilder } from "kysely";
 type Params = Record<string, string | undefined>;
 
 export function filter(params: Params) {
-  return repo.kysely
-    .selectFrom("posts")
-    .selectAll()
+  return from(Post)
     .where((eb) => filterWhere(eb, params))
     .$call(filterOrderBy(params.order_by));
 }
@@ -168,15 +158,14 @@ structures, we can use all the tools available in TypeScript to work with data. 
 `order_by` parameter, it may be best to simply switch on it. For building the `where` clause, we
 collect a list of conditions as we traverse the parameters, and `eb.and` of an empty list is true.
 
-Testing also becomes simpler as we can test the query without running it, by compiling it:
+Testing also becomes simpler, as each function can be tested on its own, and the query is data
+until a Repo runs it. In the [test sandbox](../testing/testing-with-ekto.md), we run it:
 
 ```ts
-test("filter published at based on the given date", () => {
-  assert.equal(filter({}).compile().sql, 'select * from "posts" where 1 = 1');
-  assert.deepEqual(
-    filter({ published_at: "2010-04-17" }).compile().parameters,
-    [new Date("2010-04-17")],
-  );
+test("filter published at based on the given date", async () => {
+  const since = new Date("2010-04-17");
+  const posts = await repo.all(filter({ published_at: "2010-04-17" }));
+  assert.ok(posts.every((post) => post.published_at! > since));
 });
 ```
 
@@ -192,11 +181,9 @@ Our final solution would look like this:
 ```ts
 export function filter(params: Params) {
   return (
-    repo.kysely
-      .selectFrom("posts")
+    from(Post)
       // 1. Join the authors, with a name to refer to them by
       .innerJoin("authors", "authors.id", "posts.author_id")
-      .selectAll("posts")
       .where((eb) => filterWhere(eb, params))
       .$call(filterOrderBy(params.order_by))
   );
@@ -245,6 +232,7 @@ function filterWhere(
 }
 ```
 
-Since the query still selects all the columns of `posts` (`selectAll("posts")`), `repo.all(Post,
-filter(params))` loads its rows as posts. Adding more filters in the future is simply a matter of
-adding more cases to the `switch` in `filterWhere`.
+Since `from(Post)` selects the columns of `posts` qualified with the table (`"posts"."id"`, and
+so on), the join adds no columns and they do not clash with those of `authors`:
+`repo.all(filter(params))` still loads its rows as posts. Adding more filters in the future is
+simply a matter of adding more cases to the `switch` in `filterWhere`.

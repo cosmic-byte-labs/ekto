@@ -8,7 +8,13 @@ group: How-To's
 
 Now it's time to discuss aggregates and subqueries. As we will learn, one builds directly on the
 other. This guide follows Ecto's
-[Aggregates and subqueries](https://hexdocs.pm/ecto/aggregates-and-subqueries.html).
+[Aggregates and subqueries](https://hexdocs.pm/ecto/aggregates-and-subqueries.html). Its queries
+start with `from`, defined beside the repo:
+
+```ts
+// src/repo.ts
+export const { from, kysely } = queries<DB>();
+```
 
 ## Aggregates
 
@@ -25,11 +31,7 @@ await repo.aggregate(Post, "avg", "visits");
 Behind the scenes, the query above translates to:
 
 ```ts
-await repo.one(
-  repo.kysely
-    .selectFrom("posts")
-    .select((eb) => eb.fn.avg("visits").as("value")),
-);
+await repo.one(from("posts").select((eb) => eb.fn.avg("visits").as("value")));
 ```
 
 `repo.aggregate` supports `count`, `avg`, `sum`, `min` and `max`. On a schema, the result is
@@ -44,8 +46,7 @@ top 10. Your first try may be:
 
 ```ts
 await repo.one(
-  repo.kysely
-    .selectFrom("posts")
+  from("posts")
     .select((eb) => eb.fn.avg("visits").as("value"))
     .orderBy("visits", "desc")
     .limit(10),
@@ -59,11 +60,7 @@ single row anyway. In order to retrieve the correct result, we would need to fir
 10 posts and only then aggregate. That's exactly what `aggregate` does when given a query:
 
 ```ts
-const query = repo.kysely
-  .selectFrom("posts")
-  .selectAll()
-  .orderBy("visits", "desc")
-  .limit(10);
+const query = from(Post).orderBy("visits", "desc").limit(10);
 
 await repo.aggregate(query, "avg", "visits");
 // => "4682.0000000000000000" on PostgreSQL
@@ -73,16 +70,10 @@ Given a query, `aggregate` wraps it in a subquery. Therefore the query executed 
 above is rather equivalent to:
 
 ```ts
-const innerQuery = repo.kysely
-  .selectFrom("posts")
-  .selectAll()
-  .orderBy("visits", "desc")
-  .limit(10);
+const innerQuery = from(Post).orderBy("visits", "desc").limit(10);
 
 await repo.one(
-  repo.kysely
-    .selectFrom(innerQuery.as("q"))
-    .select((eb) => eb.fn.avg("q.visits").as("value")),
+  from(innerQuery.as("q")).select((eb) => eb.fn.avg("q.visits").as("value")),
 );
 ```
 
@@ -98,27 +89,21 @@ In the previous section we have already learned some queries that would be hard 
 without support for subqueries.
 
 In ekto, queries are [Kysely](https://kysely.dev) query builders, and a query becomes a subquery
-by giving it a name with `.as(name)`. A subquery can be used where a table can: in `selectFrom`
-and in joins. All columns selected in a subquery can be accessed from the parent query, and
-Kysely keeps their types: if you write `q.column_that_does_not_exist`, your query won't type
-check. Let's revisit the aggregate query we saw in the previous section:
+by giving it a name with `.as(name)`. A subquery can be used where a table can: in `from`
+(Kysely's `selectFrom`) and in joins. All columns selected in a subquery can be accessed from the
+parent query, and Kysely keeps their types: if you write `q.column_that_does_not_exist`, your
+query won't type check. Let's revisit the aggregate query we saw in the previous section:
 
 ```ts
-const innerQuery = repo.kysely
-  .selectFrom("posts")
-  .selectAll()
-  .orderBy("visits", "desc")
-  .limit(10);
+const innerQuery = from(Post).orderBy("visits", "desc").limit(10);
 
 await repo.one(
-  repo.kysely
-    .selectFrom(innerQuery.as("q"))
-    .select((eb) => eb.fn.avg("q.visits").as("value")),
+  from(innerQuery.as("q")).select((eb) => eb.fn.avg("q.visits").as("value")),
 );
 ```
 
-Because the inner query selects all columns of `posts`, all of them are available on the parent
-query, such as `q.visits`.
+Because the inner query selects the columns of the `Post` schema, all of them are available on the
+parent query, such as `q.visits`.
 
 If you need to reference the parent in the subquery, you can do so with the parent's table name
 (or its alias) inside the subquery, as Kysely's correlated subqueries do. Here is an example that
@@ -126,7 +111,7 @@ counts the comments of each post:
 
 ```ts
 await repo.all(
-  repo.kysely.selectFrom("posts").select((eb) => [
+  from("posts").select((eb) => [
     "posts.id",
     eb
       .selectFrom("comments")
@@ -161,14 +146,12 @@ library has lent it to. To do so, we need to find the last lending ID of every b
 on the book and visitor tables. With subqueries, that's straightforward:
 
 ```ts
-const lastLendings = repo.kysely
-  .selectFrom("lendings")
+const lastLendings = from("lendings")
   .groupBy("book_id")
   .select((eb) => ["book_id", eb.fn.max("id").as("last_lending_id")]);
 
 await repo.all(
-  repo.kysely
-    .selectFrom("lendings as l")
+  from("lendings as l")
     .innerJoin(lastLendings.as("last"), "last.last_lending_id", "l.id")
     .innerJoin("books as b", "b.id", "l.book_id")
     .innerJoin("visitors as v", "v.id", "l.visitor_id")

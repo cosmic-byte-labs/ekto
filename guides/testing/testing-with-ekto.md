@@ -16,7 +16,7 @@ Tests use a database of their own. As ekto's repo is configured in code, choose 
 the environment where the repo is created, in `src/repo.ts`:
 
 ```ts
-import { createRepo } from "ekto";
+import { createRepo, queries } from "ekto";
 import { type KyselyDB, postgres } from "ekto/postgres";
 import { Person } from "./person.ts";
 
@@ -29,6 +29,8 @@ export const repo = createRepo<DB>({
       ? "postgres://postgres:postgres@localhost/myapp_test"
       : process.env.DATABASE_URL,
 });
+
+export const { from, kysely } = queries<DB>();
 ```
 
 Thereby, we configure the database connection for our test setup. In this case, we use a PostgreSQL
@@ -59,10 +61,10 @@ test("starts from an empty table", async () => {
 ```
 
 `sandbox(repo)` registers a `beforeEach` that checks out a sandbox transaction and an `afterEach`
-that rolls it back. While a test runs, the application's repo (`repo` and `repo.kysely`) runs on
-the sandbox's transaction, so the code under test needs no changes. This is Ecto's _shared_
-sandbox mode: tests of such a file must run one at a time, which is `node:test`'s default within
-a file. To use it with another test runner, pass its hooks:
+that rolls it back. While a test runs, the application's repo runs on the sandbox's transaction,
+and so do the queries it is given (those of `from` and `kysely`), so the code under test needs no
+changes. This is Ecto's _shared_ sandbox mode: tests of such a file must run one at a time, which
+is `node:test`'s default within a file. To use it with another test runner, pass its hooks:
 `sandbox(repo, { beforeEach, afterEach })`.
 
 In case you want tests to run concurrently, use
