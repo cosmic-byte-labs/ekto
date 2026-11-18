@@ -244,8 +244,8 @@ The migration's `down` does nothing, so it can be rolled back without undoing th
 To test it in development/test environments:
 
 ```bash
-pnpm ekto gen.migration --migrations data_migrations backfill_posts
-pnpm ekto migrate --migrations data_migrations
+npx ekto gen.migration --migrations data_migrations backfill_posts
+npx ekto migrate --migrations data_migrations
 ```
 
 ## Batching arbitrary data
@@ -442,8 +442,8 @@ batches run, as Ecto's `flush()` would ensure.
 And to test in development/test environments:
 
 ```bash
-pnpm ekto gen.migration --migrations data_migrations backfill_weather
-pnpm ekto migrate --migrations data_migrations
+npx ekto gen.migration --migrations data_migrations backfill_weather
+npx ekto migrate --migrations data_migrations
 ```
 
 ---

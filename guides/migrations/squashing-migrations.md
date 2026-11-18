@@ -57,7 +57,7 @@ Let's make this work:
    psql --quiet --set ON_ERROR_STOP=1 --file structure.sql "$DATABASE_URL"
    ```
 
-3. Run `pnpm ekto migrate` to run any additional migrations created after the structure was
+3. Run `npx ekto migrate` to run any additional migrations created after the structure was
    dumped.
 
 To simplify these actions into one command, we can leverage `package.json` scripts:
@@ -67,13 +67,13 @@ To simplify these actions into one command, we can leverage `package.json` scrip
   "scripts": {
     "db:dump": "pg_dump --schema-only --no-acl --no-owner --file structure.sql \"$DATABASE_URL\" && pg_dump --data-only --inserts --table schema_migrations \"$DATABASE_URL\" >> structure.sql",
     "db:load": "psql --quiet --set ON_ERROR_STOP=1 --file structure.sql \"$DATABASE_URL\"",
-    "db:setup": "pnpm db:load && ekto migrate"
+    "db:setup": "npm run db:load && ekto migrate"
   }
 }
 ```
 
-Now you can run `pnpm db:setup` and it will load the database structure and run remaining
-migrations. Of course, you can continue running `pnpm ekto migrate` as you create them.
+Now you can run `npm run db:setup` and it will load the database structure and run remaining
+migrations. Of course, you can continue running `npx ekto migrate` as you create them.
 
 With SQLite, the `sqlite3` command does the same:
 

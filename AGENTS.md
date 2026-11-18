@@ -22,8 +22,9 @@ pnpm docs:build                  # TypeDoc → docs/api/ (git-ignored); docs:che
 
 ## Conventions
 
-- **pnpm only.** Do not add `package-lock.json` or `yarn.lock`. The pnpm version is pinned in
-  `package.json` `packageManager` and in `.slot` `[tools]`.
+- **pnpm only, for working on ekto.** Do not add `package-lock.json` or `yarn.lock`. The pnpm
+  version is pinned in `package.json` `packageManager` and in `.slot` `[tools]`. Users of the
+  package can use any package manager: user-facing docs show npm (`npm install`, `npx ekto`).
 - **TypeScript runs natively in Node** (type stripping), with no tsx or ts-node. So only erasable
   syntax (`erasableSyntaxOnly`): no `enum`, no `namespace`, no constructor parameter properties.
   Use `as const` objects and unions instead of enums.

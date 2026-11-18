@@ -20,8 +20,8 @@ To start off with, we'll create a new Node project called `friends`:
 
 ```bash
 mkdir friends && cd friends
-pnpm init
-pnpm pkg set type=module
+npm init -y
+npm pkg set type=module
 ```
 
 ekto runs TypeScript files directly with Node 24.3 or later, so there is nothing to compile
@@ -29,8 +29,10 @@ for this guide. To add ekto, we install it together with [Kysely](https://kysely
 ekto builds its queries with, and `pg` (node-postgres), the driver that talks to PostgreSQL:
 
 ```bash
-pnpm add ekto kysely pg
+npm install ekto kysely pg
 ```
+
+(This guide uses npm; pnpm, yarn and bun work just as well.)
 
 ekto provides the common API, but it needs the driver installed too, as that is what ekto uses
 to speak in terms a PostgreSQL database can understand. ekto talks to its PostgreSQL adapter,
@@ -106,7 +108,7 @@ constructing your database.
 Let's create a migration now with this command:
 
 ```bash
-pnpm ekto gen.migration create_people
+npx ekto gen.migration create_people
 ```
 
 This command will generate a brand new migration file in `migrations`, which is empty by
@@ -149,17 +151,17 @@ like any other column.
 To run this migration and create the `people` table in our database, we will run this command:
 
 ```bash
-pnpm ekto migrate
+npx ekto migrate
 ```
 
 ```
 == Migrated 20260115103000 create_people
 ```
 
-If we found out that we made a mistake in this migration, we could run `pnpm ekto rollback` to
+If we found out that we made a mistake in this migration, we could run `npx ekto rollback` to
 undo the changes in the migration. We could then fix the changes in the migration and run
-`pnpm ekto migrate` again. If we ran `pnpm ekto rollback` now, it would delete the table that we
-just created. `pnpm ekto status` lists the migrations and whether they ran.
+`npx ekto migrate` again. If we ran `npx ekto rollback` now, it would delete the table that we
+just created. `npx ekto status` lists the migrations and whether they ran.
 
 We now have a table created in our database. The next step that we'll need to do is to create
 the schema.
@@ -492,7 +494,7 @@ database, we'll run these commands:
 ```bash
 dropdb friends
 createdb friends
-pnpm ekto migrate
+npx ekto migrate
 ```
 
 Then to create the test data, we'll run this in a script:
@@ -779,7 +781,7 @@ will be `true`, but if it fails then it will be `false`.
 To follow this guide with SQLite instead of PostgreSQL, install `sqlite3` instead of `pg`:
 
 ```bash
-pnpm add ekto kysely sqlite3
+npm install ekto kysely sqlite3
 ```
 
 and use the SQLite adapter, with the path of the database file, in `src/repo.ts` and

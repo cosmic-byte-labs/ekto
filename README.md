@@ -83,15 +83,19 @@ ekto runs on Node 24.3 or later, and needs `kysely` and the driver of your datab
 
 ```bash
 # PostgreSQL
-pnpm add ekto kysely pg
+npm install ekto kysely pg
 
 # SQLite
-pnpm add ekto kysely sqlite3
+npm install ekto kysely sqlite3
 ```
 
-`pg` and `sqlite3` are optional peer dependencies: install the one you use. `sqlite3` builds a
-native addon; pnpm asks you to approve its build (`pnpm approve-builds`). SQLite can also use
-Node's built-in `node:sqlite`, which needs no package (see [SQLite](#sqlite)).
+The docs use npm; pnpm, yarn and bun work the same way (`pnpm add`, `yarn add` or `bun add`, and
+`pnpm ekto`, `yarn ekto` or `bunx ekto` where the docs write `npx ekto`).
+
+`pg` and `sqlite3` are optional peer dependencies: install the one you use. `sqlite3` is a native
+addon, so installing it runs a build script; pnpm asks you to approve that first
+(`pnpm approve-builds`). SQLite can also use Node's built-in `node:sqlite`, which needs no package
+(see [SQLite](#sqlite)).
 
 ## Quickstart
 

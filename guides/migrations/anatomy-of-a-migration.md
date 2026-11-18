@@ -20,12 +20,12 @@ follows ecto_sql's [Anatomy of a Migration](https://hexdocs.pm/ecto_sql/migratio
 To generate a migration, we'll run the `ekto` command:
 
 ```bash
-pnpm ekto gen.migration create_weather_table
+npx ekto gen.migration create_weather_table
 ```
 
 > [!TIP]
-> `pnpm ekto gen.schema` generates a migration too, together with a schema, and allows you to pass
-> in fields and types. See `pnpm ekto --help` for more information.
+> `npx ekto gen.schema` generates a migration too, together with a schema, and allows you to pass
+> in fields and types. See `npx ekto --help` for more information.
 
 This command will generate a file in `migrations/`, or in the `migrationsFolder` of
 `ekto.config.ts`.
@@ -61,10 +61,10 @@ export default migration({
 
 Unlike Ecto, `table` adds no `id` column, so we declare the primary key ourselves.
 
-Now that we have a migration, let's run it! Run `pnpm ekto migrate`:
+Now that we have a migration, let's run it! Run `npx ekto migrate`:
 
 ```bash
-$ pnpm ekto migrate
+$ npx ekto migrate
 == Migrated 20210702012346 create_weather_table
 ```
 
@@ -82,9 +82,9 @@ The setting applies to new connections. First, I'll roll back, and then re-migra
 PostgreSQL server logs:
 
 ```bash
-$ pnpm ekto rollback
+$ npx ekto rollback
 == Rolled back 20210702012346 create_weather_table
-$ pnpm ekto migrate
+$ npx ekto migrate
 == Migrated 20210702012346 create_weather_table
 ```
 
