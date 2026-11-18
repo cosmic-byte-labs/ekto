@@ -59,27 +59,92 @@ Guides that follow Ecto's own, in `guides/` and in the API docs (`pnpm docs:buil
 
 ## Features
 
-- Schemas as plain objects with typed fields, defaults, virtual and redacted fields, timestamps
-  and generated keys; record types are inferred (`Infer<typeof User>`).
-- Kysely table types derived from schemas (`KyselyDB<[typeof User, typeof Post]>`).
-- Changesets: `cast`, `validateRequired`, `validateLength`, `validateNumber`, `validateFormat`,
-  `validateInclusion` and the rest of Ecto's validations, plus `validateWith` for Standard Schema
-  validators (Zod, Valibot, ArkType). Schemaless changesets for forms that are not tables.
-- Unique, foreign key, check and exclusion constraints reported as changeset errors.
-- Writes return `{ ok: true, value }` or `{ ok: false, changeset }`; each has an `…OrThrow`
-  variant.
-- Optimistic locking, upserts (`onConflict`), `insertAll`, `updateAll`, `deleteAll`, aggregates.
-- Queries that belong to no Repo, as in Ecto: `from(Post)` is a typed Kysely query whose rows
-  load as records, and any Repo runs it with its own dialect and plugins, in its transaction or
-  test sandbox. `repo.toSql(query)` shows the SQL without running it.
-- `belongsTo`, `hasMany`, `hasOne` and `manyToMany` associations, preloaded with one query per
-  association, or queried with `repo.assoc(post, "comments")`; no lazy loading.
-- Transactions with `repo.transact`, and `Multi` for named steps that see each other's results.
-- Migrations with a reversible `change`, a `schema_migrations` table and a migration lock; the
-  `ekto` command migrates, rolls back, reports status and generates migrations and schemas.
-- A test sandbox (`ekto/testing`) that runs each test in a transaction that is rolled back.
-- PostgreSQL (node-postgres) and SQLite (node-sqlite3), with a connection pool owned by the
-  Repo.
+**Schemas are plain objects, with types inferred** for records and for Kysely's tables. See
+[Schemas](#schemas).
+
+```ts
+const User = schema("users", { id: t.id(), email: t.string() });
+type User = Infer<typeof User>; // { id: number; email: string }
+type DB = KyselyDB<[typeof User, typeof Post]>;
+```
+
+**Changesets cast and validate input**, with Ecto's validations or any Standard Schema validator
+(Zod, Valibot, ArkType), and turn constraint violations into field errors. See
+[Changesets](#changesets).
+
+```ts
+const cs = pipe(
+  cast(User.new(), params, ["email", "name"]),
+  validateRequired(["email"]),
+  validateWith("email", z.email()),
+  uniqueConstraint("email"),
+);
+```
+
+**Writes return a result instead of throwing on invalid input**, each with an `…OrThrow`
+variant. Also upserts, bulk writes and optimistic locking. See [Repo](#repo).
+
+```ts
+const result = await repo.insert(cs);
+if (!result.ok) traverseErrors(result.changeset); // { email: ["has already been taken"] }
+
+await repo.insertAll(User, rows, { onConflict: "nothing" });
+```
+
+**Queries are typed Kysely builders that belong to no Repo**, as in Ecto: a Repo runs them with
+its dialect, in its transaction or test sandbox, and loads their rows as records. See
+[Queries](#queries).
+
+```ts
+const published = from(Post).where("status", "=", "published").limit(10);
+
+await repo.all(published); // Post[]
+repo.toSql(published); // { sql: 'select "posts"."id", … limit $2', params: ["published", 10] }
+```
+
+**Associations are loaded explicitly**, one query per association, never lazily: `belongsTo`,
+`hasMany`, `hasOne` and `manyToMany`. See [Preloads](#preloads).
+
+```ts
+const users = await repo.preload(await repo.all(User), { posts: "author" });
+const comments = await repo.all(repo.assoc(post, "comments").orderBy("id"));
+```
+
+**Transactions, and `Multi` for named steps** that see each other's results and commit or roll
+back together. See [Transactions and Multi](#transactions-and-multi).
+
+```ts
+const result = await repo.transact(
+  Multi.new<DB>()
+    .insert("user", changeset(User.new(), params))
+    .insert("post", ({ user }) =>
+      buildAssoc(user, "posts", { title: "Hello" }),
+    ),
+);
+```
+
+**Migrations and an `ekto` command** that generates schemas and migrations, migrates and rolls
+back. See [Migrations](#migrations).
+
+```bash
+npx ekto gen.schema Post posts title body:text author_id:references:users
+npx ekto migrate
+```
+
+**A test sandbox** that runs each test in a transaction and rolls it back, while your code keeps
+using its Repo. See [Testing](#testing).
+
+```ts
+sandbox(repo);
+```
+
+**PostgreSQL and SQLite**, through node-postgres and node-sqlite3 (or `node:sqlite`), with a
+connection pool owned by the Repo. See [Configuration](#configuration).
+
+```ts
+createRepo<DB>({ adapter: postgres(), url: process.env.DATABASE_URL });
+createRepo<DB>({ adapter: sqlite(), database: "app.db" });
+```
 
 ## Install
 
@@ -409,8 +474,9 @@ schema's columns. As with Ecto's `select_merge`, it may select more columns only
 schema's fields: one named after a field overrides it, and one named after a virtual field sets
 it (`.select((eb) => eb.fn.count("comments.id").as("comment_count"))`). Any other column fails
 type checking, and it or `*` throws. A query that selects something else is a query of plain
-rows, returned as the driver gives them: `from("posts")` (Kysely's `selectFrom`, of a table, an alias such as
-`"posts as p"` or a subquery, selecting nothing yet), or `from(Post)` after `clearSelect()`:
+rows, returned as the driver gives them: `from("posts")` (Kysely's `selectFrom`, of a table, an
+alias such as `"posts as p"` or a subquery, selecting nothing yet), or `from(Post)` after
+`clearSelect()`:
 
 ```ts
 const counts = await repo.all(
