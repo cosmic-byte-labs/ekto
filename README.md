@@ -69,8 +69,11 @@ Guides that follow Ecto's own, in `guides/` and in the API docs (`pnpm docs:buil
 - Writes return `{ ok: true, value }` or `{ ok: false, changeset }`; each has an `…OrThrow`
   variant.
 - Optimistic locking, upserts (`onConflict`), `insertAll`, `updateAll`, `deleteAll`, aggregates.
+- Queries that belong to no Repo, as in Ecto: `from(Post)` is a typed Kysely query whose rows
+  load as records, and any Repo runs it with its own dialect and plugins, in its transaction or
+  test sandbox. `repo.toSql(query)` shows the SQL without running it.
 - `belongsTo`, `hasMany`, `hasOne` and `manyToMany` associations, preloaded with one query per
-  association; no lazy loading.
+  association, or queried with `repo.assoc(post, "comments")`; no lazy loading.
 - Transactions with `Repo.transact`, and `Multi` for named steps that see each other's results.
 - Migrations with a reversible `change`, a `schema_migrations` table and a migration lock; the
   `ekto` command migrates, rolls back, reports status and generates migrations and schemas.
@@ -726,7 +729,9 @@ instead of queueing on. `repo.config` returns the configuration with its default
 Most names map directly (`Repo.insert` is `repo.insert`, `{:ok, user}` is `{ ok: true, value }`,
 `insert!` is `insertOrThrow`). Where ekto differs:
 
-- Queries are Kysely builders, not `Ecto.Query`.
+- Queries are Kysely builders, not `Ecto.Query`. `from p in Post` is `from(Post)`,
+  `select_merge` is a `select` on it of the schema's fields, `Repo.to_sql` is `repo.toSql`, and
+  `Ecto.assoc` is `repo.assoc`, on the Repo because it converts the keys for its database.
 - Migrations declare the primary key explicitly; `create(table(...))` adds no `id`.
 - `belongsTo` does not define the foreign key field.
 - Field names are column names; there is no `:source` renaming and no schema prefixes yet.
