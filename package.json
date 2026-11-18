@@ -1,6 +1,6 @@
 {
   "name": "ekto",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Ecto-inspired data layer for TypeScript: schemas, changesets, composable queries and a Repo as the only side-effecting boundary.",
   "license": "MIT",

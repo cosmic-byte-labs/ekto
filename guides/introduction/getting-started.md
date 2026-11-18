@@ -26,10 +26,11 @@ npm pkg set type=module
 
 ekto runs TypeScript files directly with Node 24.3 or later, so there is nothing to compile
 for this guide. To add ekto, we install it together with [Kysely](https://kysely.dev), which
-ekto builds its queries with, and `pg` (node-postgres), the driver that talks to PostgreSQL:
+ekto builds its queries with, and `pg` (node-postgres), the driver that talks to PostgreSQL.
+ekto is not on the npm registry; it comes from the tarball of its GitHub release:
 
 ```bash
-npm install ekto kysely pg
+npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely pg
 ```
 
 (This guide uses npm; pnpm, yarn and bun work just as well.)
@@ -781,7 +782,7 @@ will be `true`, but if it fails then it will be `false`.
 To follow this guide with SQLite instead of PostgreSQL, install `sqlite3` instead of `pg`:
 
 ```bash
-npm install ekto kysely sqlite3
+npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely sqlite3
 ```
 
 and use the SQLite adapter, with the path of the database file, in `src/repo.ts` and

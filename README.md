@@ -36,7 +36,8 @@ ekto is inspired by Ecto and not affiliated with it. It is split into four piece
 Around them: associations and preloads, `Multi` for operations that run together in one
 transaction, migrations with an `ekto` command, and a test sandbox that rolls back every test.
 
-**Status:** early development. The API may still change, and the package is not on npm yet.
+**Status:** 1.0. ekto is released on [GitHub Releases](https://github.com/cosmic-byte-labs/ekto/releases),
+not on the npm registry: install it from the release tarball (see [Install](#install)).
 
 ## Guides
 
@@ -79,14 +80,16 @@ Guides that follow Ecto's own, in `guides/` and in the API docs (`pnpm docs:buil
 
 ## Install
 
-ekto runs on Node 24.3 or later, and needs `kysely` and the driver of your database.
+ekto runs on Node 24.3 or later, and needs `kysely` and the driver of your database. ekto itself
+comes from the tarball of a [GitHub release](https://github.com/cosmic-byte-labs/ekto/releases)
+(change `1.0.0` in the URL for another version).
 
 ```bash
 # PostgreSQL
-npm install ekto kysely pg
+npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely pg
 
 # SQLite
-npm install ekto kysely sqlite3
+npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely sqlite3
 ```
 
 The docs use npm; pnpm, yarn and bun work the same way (`pnpm add`, `yarn add` or `bun add`, and
