@@ -70,6 +70,7 @@ export {
 } from "./multi.ts";
 export type { PreloadOptions } from "./preloader.ts";
 export {
+  type AssocQuery,
   type From,
   type FromQuery,
   type Queries,

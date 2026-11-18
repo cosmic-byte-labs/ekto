@@ -127,6 +127,12 @@ export type FromQuery<DB, S extends AnySchema> = SelectQueryBuilder<
   Selectable<DB[TableOf<DB, S>]> & SchemaRow<S>
 >;
 
+/**
+ * The query `Repo.assoc` returns for the related schema `R`: a `from(R)`
+ * query, filtered to the associated records.
+ */
+export type AssocQuery<DB, R> = R extends AnySchema ? FromQuery<DB, R> : never;
+
 /** Kysely's `selectFrom` of `DB`. */
 type SelectFromOf<DB> = QueryCreator<DB>["selectFrom"];
 
@@ -201,29 +207,42 @@ export function queries<DB>(): Queries<DB> {
   // biome-ignore lint/suspicious/noExplicitAny: built for any table
   const db = kysely as Kysely<any>;
   function from(source: unknown): unknown {
-    if (!isSchema(source)) {
-      if (
-        source === null ||
-        (typeof source !== "string" && typeof source !== "object")
-      ) {
-        throw new TypeError(
-          `from expects a schema or a table, got: ${String(source)}`,
-        );
-      }
-      return db.selectFrom(source as string);
+    if (isSchema(source)) return schemaQuery(source);
+    if (
+      source === null ||
+      (typeof source !== "string" && typeof source !== "object")
+    ) {
+      throw new TypeError(
+        `from expects a schema or a table, got: ${String(source)}`,
+      );
     }
-    const table = source.source;
-    const builder = db
-      .selectFrom(table)
-      .select(source.persistedFields.map((field) => `${table}.${field}`));
-    const compiled = builder.compile() as unknown as UnboundQuery;
-    schemaQueries.set(compiled.queryId, {
-      schema: source,
-      selections: (compiled.query as SelectQueryNode).selections ?? [],
-    });
-    return builder;
+    return db.selectFrom(source as string);
   }
   return Object.freeze({ from: from as From<DB>, kysely });
+}
+
+/** The Kysely instance without a database of the queries ekto builds itself. */
+// biome-ignore lint/suspicious/noExplicitAny: built for any table
+const unboundDb = new Kysely<any>({ dialect: unboundDialect });
+
+/**
+ * `from(schema)`: a query without a database of the schema's persisted
+ * columns, qualified with its table, whose rows a Repo loads as records.
+ */
+export function schemaQuery(
+  schema: AnySchema,
+  // biome-ignore lint/suspicious/noExplicitAny: a query of any table
+): SelectQueryBuilder<any, any, any> {
+  const table = schema.source;
+  const builder = unboundDb
+    .selectFrom(table)
+    .select(schema.persistedFields.map((field) => `${table}.${field}`));
+  const compiled = builder.compile() as unknown as UnboundQuery;
+  schemaQueries.set(compiled.queryId, {
+    schema,
+    selections: (compiled.query as SelectQueryNode).selections ?? [],
+  });
+  return builder;
 }
 
 /**

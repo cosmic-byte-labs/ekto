@@ -482,7 +482,8 @@ const users = await repo.preload(await repo.all(User), {
 A preload spec is an association name, an array of specs, or an object whose values are `true`,
 a nested spec, a function refining the query, or `[refine, nested]`. Associations already loaded
 are kept unless `{ force: true }` is passed. `repo.assoc(user, "posts")` returns the query of
-the associated records, to refine and run with `repo.all(Post, ...)`.
+the associated records, a `from(Post)` query to refine and run:
+`repo.all(repo.assoc(user, "posts").orderBy("id"))` loads posts.
 
 ## Transactions and Multi
 

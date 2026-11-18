@@ -88,40 +88,37 @@ describe("Repo.assoc queries", () => {
   const other = load(Post, { id: 2, title: "b", author_id: null });
 
   test("filter the related table by the owner keys (Ecto.assoc)", () => {
-    const comments = Repo.assoc(post, "comments").compile();
-    assert.equal(
-      comments.sql,
-      'select "pl_comments".* from "pl_comments" where "pl_comments"."post_id" = $1',
-    );
-    assert.deepEqual(comments.parameters, [1]);
+    assert.deepEqual(Repo.toSql(Repo.assoc(post, "comments")), {
+      sql: 'select "pl_comments"."id", "pl_comments"."body", "pl_comments"."post_id" from "pl_comments" where "pl_comments"."post_id" = $1',
+      params: [1],
+    });
 
-    const authors = Repo.assoc([post, other, post], "author").compile();
+    const authors = Repo.toSql(Repo.assoc([post, other, post], "author"));
     assert.equal(
       authors.sql,
-      'select "pl_users".* from "pl_users" where "pl_users"."id" = $1',
+      'select "pl_users"."id", "pl_users"."email" from "pl_users" where "pl_users"."id" = $1',
       "null keys are skipped and keys are unique",
     );
 
-    const both = Repo.assoc([post, other], "comments").compile();
+    const both = Repo.toSql(Repo.assoc([post, other], "comments"));
     assert.match(both.sql, /"pl_comments"."post_id" in \(\$1, \$2\)/);
-    assert.deepEqual(both.parameters, [1, 2]);
+    assert.deepEqual(both.params, [1, 2]);
   });
 
   test("join the join table for many to many", () => {
-    const tags = Repo.assoc([post, other], "tags").compile();
+    const tags = Repo.toSql(Repo.assoc([post, other], "tags"));
     assert.equal(
       tags.sql,
-      'select "pl_tags".* from "pl_tags" ' +
+      'select "pl_tags"."id", "pl_tags"."name" from "pl_tags" ' +
         'inner join "pl_posts_tags" on "pl_posts_tags"."tag_id" = "pl_tags"."id" ' +
         'where "pl_posts_tags"."post_id" in ($1, $2)',
     );
   });
 
   test("match nothing when no record has a key", () => {
-    const authors = Repo.assoc(other, "author").compile();
     assert.equal(
-      authors.sql,
-      'select "pl_users".* from "pl_users" where false',
+      Repo.toSql(Repo.assoc(other, "author")).sql,
+      'select "pl_users"."id", "pl_users"."email" from "pl_users" where false',
     );
   });
 
@@ -394,14 +391,21 @@ describe("Repo.preload on Postgres", { skip: skipWithoutPg }, () => {
   test("Repo.assoc builds a query to refine and run", async () => {
     const [post] = await posts();
     const comments = await Repo.all(
-      Comment,
       Repo.assoc(post as Infer<typeof Post>, "comments").orderBy("id", "desc"),
     );
+    type _loaded = Expect<Equal<typeof comments, Infer<typeof Comment>[]>>;
+    assert.ok(comments.every((c) => getMeta(c)?.schema === Comment));
     assert.deepEqual(
       comments.map((c) => c.body),
       ["c2", "c1"],
     );
-    const tags = await Repo.all(Tag, Repo.assoc(await posts(), "tags"));
+    const tags = await Repo.all(Repo.assoc(await posts(), "tags"));
+    assert.ok(tags.every((tag) => getMeta(tag)?.schema === Tag));
+    assert.deepEqual(
+      await Repo.all(Tag, Repo.assoc(await posts(), "tags")),
+      tags,
+      "it runs with a schema too",
+    );
     assert.deepEqual(tags.map((tag) => tag.name).sort(), [
       "blue",
       "blue",

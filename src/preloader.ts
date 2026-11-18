@@ -10,6 +10,7 @@
 import { inspect } from "node:util";
 import type { Kysely, SelectQueryBuilder } from "kysely";
 import { association, type Reflection } from "./association.ts";
+import { schemaQuery } from "./query.ts";
 import { type AnySchema, getMeta, putMeta } from "./schema.ts";
 
 /** What the preloader needs from the Repo. */
@@ -374,7 +375,8 @@ function keyOf(value: unknown): unknown {
 
 /**
  * `Repo.assoc`: a query of the records associated with the given records
- * (Ecto's `Ecto.assoc/2`). Records whose key is null match nothing.
+ * (Ecto's `Ecto.assoc/2`), a `from(Related)` query, so that a Repo loads its
+ * rows as records. Records whose key is null match nothing.
  */
 export function assocQuery(
   context: PreloadContext,
@@ -410,7 +412,7 @@ export function assocQuery(
     seen.add(key);
     ids.push(id);
   }
-  const base = baseQuery(context, reflection.related);
+  const base = schemaQuery(reflection.related);
   if (ids.length === 0) {
     // `IN ()` is not valid SQL; no key matches nothing.
     return base.where((eb) => eb.lit(false));

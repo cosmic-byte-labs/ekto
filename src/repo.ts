@@ -43,7 +43,6 @@ import {
 import type {
   AssociationName,
   PreloadedFields,
-  PreloadQuery,
   PreloadSpec,
   RelatedSchema,
 } from "./association.ts";
@@ -79,6 +78,7 @@ import {
   preload,
 } from "./preloader.ts";
 import {
+  type AssocQuery,
   bindQuery,
   isUnboundQuery,
   type SchemaRow,
@@ -650,14 +650,16 @@ export interface Repo<DB = any> {
   ): Promise<(R & PreloadedFields<SchemaOf<R>, P>) | null>;
 
   /**
-   * A Kysely query of the records associated with a record or a list of
-   * records of one schema (Ecto's `Ecto.assoc/2`), to refine and run, e.g.
-   * `Repo.all(Comment, Repo.assoc(post, "comments").orderBy("id"))`.
+   * The query of the records associated with a record or a list of records
+   * of one schema (Ecto's `Ecto.assoc/2`): a `from(Related)` query, to refine
+   * and run, e.g.
+   * `repo.all(repo.assoc(post, "comments").orderBy("id"))`, which loads
+   * comments.
    */
   assoc<R extends object, N extends AssociationName<SchemaOf<R>>>(
     records: R | readonly R[],
     name: N,
-  ): PreloadQuery<DB, RelatedSchema<SchemaOf<R>, N>>;
+  ): AssocQuery<DB, RelatedSchema<SchemaOf<R>, N>>;
 
   /** Builds a loaded record from a raw database row (Ecto's `Repo.load/2`). */
   load<S extends AnySchema>(
