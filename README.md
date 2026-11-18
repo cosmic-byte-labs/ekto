@@ -74,7 +74,7 @@ Guides that follow Ecto's own, in `guides/` and in the API docs (`pnpm docs:buil
   test sandbox. `repo.toSql(query)` shows the SQL without running it.
 - `belongsTo`, `hasMany`, `hasOne` and `manyToMany` associations, preloaded with one query per
   association, or queried with `repo.assoc(post, "comments")`; no lazy loading.
-- Transactions with `Repo.transact`, and `Multi` for named steps that see each other's results.
+- Transactions with `repo.transact`, and `Multi` for named steps that see each other's results.
 - Migrations with a reversible `change`, a `schema_migrations` table and a migration lock; the
   `ekto` command migrates, rolls back, reports status and generates migrations and schemas.
 - A test sandbox (`ekto/testing`) that runs each test in a transaction that is rolled back.
@@ -407,9 +407,9 @@ const first = await repo.one(query.limit(1)); // Post | null
 The columns are qualified with the table (`posts.id, posts.title, …`), so joins keep the
 schema's columns. As with Ecto's `select_merge`, it may select more columns only for the
 schema's fields: one named after a field overrides it, and one named after a virtual field sets
-it (`.select((eb) => eb.fn.count("comments.id").as("comment_count"))`). Any other column fails type
-checking, and it or `*` throws. A query that selects something else is a query of plain rows, returned as the
-driver gives them: `from("posts")` (Kysely's `selectFrom`, of a table, an alias such as
+it (`.select((eb) => eb.fn.count("comments.id").as("comment_count"))`). Any other column fails
+type checking, and it or `*` throws. A query that selects something else is a query of plain
+rows, returned as the driver gives them: `from("posts")` (Kysely's `selectFrom`, of a table, an alias such as
 `"posts as p"` or a subquery, selecting nothing yet), or `from(Post)` after `clearSelect()`:
 
 ```ts
