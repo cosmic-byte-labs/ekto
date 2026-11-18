@@ -471,6 +471,15 @@ const posts = await repo.all(query); // Post[]
 const first = await repo.one(query.limit(1)); // Post | null
 ```
 
+Chained `where`s are combined with `and`; for `or` and nested conditions, `where` takes a function
+of Kysely's expression builder:
+
+```ts
+from(Post).where((eb) =>
+  eb.or([eb("status", "=", "published"), eb("author_id", "=", authorId)]),
+);
+```
+
 The columns are qualified with the table (`posts.id, posts.title, …`), so joins keep the schema's
 columns. It may select more columns only for the schema's fields: one named after a field overrides
 it, and one named after a virtual field sets it

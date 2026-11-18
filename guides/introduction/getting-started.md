@@ -668,7 +668,21 @@ from "people" where "last_name" = $1 and "first_name" = $2
 ```
 
 This can be useful if you want to do something with the first query, and then build off that
-query later on. The [Dynamic queries](../howtos/dynamic-queries.md) guide shows more.
+query later on.
+
+Chained `where` clauses are combined with `and`. For anything else, `where` takes a function
+receiving Kysely's expression builder, `eb`, and returns a condition built with it:
+
+```ts
+from(Person).where((eb) =>
+  eb.or([
+    eb("first_name", "=", "Jennifer"),
+    eb("first_name", "=", "Sylvester"),
+  ]),
+);
+```
+
+The [Dynamic queries](../howtos/dynamic-queries.md) guide shows more.
 
 ## Updating records
 
