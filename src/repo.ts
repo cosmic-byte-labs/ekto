@@ -1623,7 +1623,7 @@ function bind<DB>(
       const { compiled, schema } = compileReadWithSchema(first, fn);
       const { rows } = await executor.execute(compiled, schema?.source);
       return {
-        rows: schema ? rows.map((row) => loadRow(schema, row)) : rows,
+        rows: schema ? rows.map((row) => loadSelected(schema, row)) : rows,
         sql: compiled.sql,
       };
     }
@@ -1635,6 +1635,18 @@ function bind<DB>(
       rows: rows.map((row) => loadRow(first, row)),
       sql: compiled.sql,
     };
+  }
+
+  /**
+   * Loads a row of a `from(Schema)` query, setting the virtual fields it
+   * selects (Ecto's `select_merge` into a struct).
+   */
+  function loadSelected(schema: AnySchema, row: Values): object {
+    const record = loadRow(schema, row) as Record<string, unknown>;
+    for (const name of schema.virtualFields) {
+      if (Object.hasOwn(row, name)) record[name] = row[name];
+    }
+    return record;
   }
 
   /** Loads a row of a schema query, checking that no column is missing. */

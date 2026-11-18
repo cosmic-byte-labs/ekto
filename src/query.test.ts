@@ -95,8 +95,9 @@ describe("queries", () => {
     assert.equal(schemaOfQuery(compileUnbound(base)), Post);
     assert.equal(schemaOfQuery(compileUnbound(filtered)), Post);
     assert.equal(
-      schemaOfQuery(compileUnbound(base.select(ksql<number>`1`.as("one")))),
+      schemaOfQuery(compileUnbound(base.select(ksql<string>`'x'`.as("title")))),
       Post,
+      "a column of a field overrides it",
     );
     assert.equal(
       schemaOfQuery(compileUnbound(base.clearSelect().select("id"))),
@@ -112,6 +113,44 @@ describe("queries", () => {
     assert.equal(
       schemaOfQuery(compileUnbound(kysely.selectFrom("q_posts").selectAll())),
       undefined,
+    );
+  });
+
+  test("selects besides only fields of the schema, like Ecto's select_merge", () => {
+    const fields = (query: { compile(): unknown }) =>
+      schemaOfQuery(compileUnbound(query as never));
+    assert.equal(fields(from(Post).select("title")), Post);
+    assert.equal(
+      fields(from(Post).select(ksql<boolean>`true`.as("draft"))),
+      Post,
+      "a virtual field",
+    );
+    const notAField = (name: string) =>
+      new RegExp(
+        `^TypeError: from\\(q_posts\\) selects ${name.replace(/[.*]/g, "\\$&")}, which is not a field of its schema`,
+      );
+    assert.throws(
+      () => fields(from(Post).select(ksql<number>`1`.as("one"))),
+      notAField("one"),
+    );
+    assert.throws(
+      () =>
+        fields(
+          from(Post)
+            .innerJoin("q_users", "q_users.id", "q_posts.user_id")
+            .select("q_users.email"),
+        ),
+      notAField("email"),
+    );
+    assert.throws(() => fields(from(Post).selectAll()), notAField("*"));
+    assert.throws(
+      () => fields(from(Post).selectAll("q_posts")),
+      notAField("q_posts.*"),
+    );
+    assert.equal(
+      fields(from(Post).clearSelect().select(ksql<number>`1`.as("one"))),
+      undefined,
+      "after clearSelect, any column: a query of plain rows",
     );
   });
 
@@ -279,6 +318,34 @@ function suite(
       await insertPost("Kysely", bob.id, 0);
       seen.length = 0;
       events.length = 0;
+    });
+
+    test("columns of fields override them and set virtual fields (select_merge)", async () => {
+      const [post] = await repo.all(
+        from(Post)
+          .select((eb) => [
+            eb.fn<string>("upper", ["title"]).as("title"),
+            eb.lit(true).as("draft"),
+          ])
+          .where("title", "=", "Ecto"),
+      );
+      assert.equal(post?.title, "ECTO");
+      assert.equal(Boolean(post?.draft), true);
+      assert.equal(getMeta(post ?? {})?.schema, Post);
+      const [plain] = await repo.all(from(Post).where("title", "=", "Ecto"));
+      assert.equal(plain?.draft, Post.new().draft, "not selected: its default");
+
+      events.length = 0;
+      const notAField = /from\(q_posts\) selects one, which is not a field/;
+      await assert.rejects(
+        repo.all(from(Post).select(ksql<number>`1`.as("one"))),
+        notAField,
+      );
+      assert.throws(
+        () => repo.toSql(from(Post).select(ksql<number>`1`.as("one"))),
+        notAField,
+      );
+      assert.deepEqual(events, [], "it throws before running the query");
     });
 
     test("all loads the records of a from(Schema) query", async () => {

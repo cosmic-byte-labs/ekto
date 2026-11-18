@@ -16,17 +16,22 @@
  */
 
 import {
+  type AliasNode,
+  type ColumnNode,
   type CompiledQuery,
   type DatabaseIntrospector,
   type Dialect,
+  type IdentifierNode,
   Kysely,
   type OperationNode,
   PostgresAdapter,
   type QueryCompiler,
   type QueryCreator,
   type QueryId,
+  type ReferenceNode,
   type RootOperationNode,
   type Selectable,
+  type SelectionNode,
   type SelectQueryBuilder,
   type SelectQueryNode,
 } from "kysely";
@@ -157,6 +162,11 @@ export interface From<DB> extends SelectFromOf<DB> {
    * rows as records, unless its selection was cleared (`clearSelect()`),
    * which makes it a query of plain rows.
    *
+   * Like Ecto's `select_merge` into a struct, it may select more columns
+   * only for the schema's fields: a column named after a field overrides
+   * it, and one named after a virtual field sets it. Running or printing
+   * the query throws when it selects any other column, or `*`.
+   *
    * ```ts
    * const posts = await repo.all(from(Post).where("title", "like", "Ecto%"));
    * ```
@@ -247,14 +257,65 @@ export function schemaQuery(
 
 /**
  * The schema of a `from(Schema)` query, when its selection still begins
- * with the schema's columns (not after `clearSelect()`).
+ * with the schema's columns (not after `clearSelect()`). As with Ecto's
+ * `select_merge` into a struct, the columns it selects besides must be
+ * fields of the schema: a column of a field overrides it and a column of a
+ * virtual field sets it. Any other column throws, and so does `*` or
+ * `table.*`, whose columns are not known.
  */
 export function schemaOfQuery(query: UnboundQuery): AnySchema | undefined {
   const remembered = schemaQueries.get(query.queryId);
   if (remembered === undefined) return undefined;
   const selections = (query.query as SelectQueryNode).selections ?? [];
   const kept = remembered.selections.every((s, i) => selections[i] === s);
-  return kept ? remembered.schema : undefined;
+  if (!kept) return undefined;
+  const { schema } = remembered;
+  for (const selection of selections.slice(remembered.selections.length)) {
+    const name = selectedName(selection);
+    if (name === undefined || !Object.hasOwn(schema.fields, name)) {
+      throw new TypeError(
+        `from(${schema.source}) selects ${name ?? selectedAll(selection)}, which is not a field of its schema: ` +
+          "a query of a schema's records can select only its fields (Ecto's select_merge)",
+      );
+    }
+  }
+  return schema;
+}
+
+/**
+ * The name of the column a selection gives, or undefined for `*` and
+ * `table.*`.
+ */
+function selectedName(node: OperationNode): string | undefined {
+  const selection = (node as SelectionNode).selection;
+  switch (selection.kind) {
+    case "AliasNode": {
+      const alias = (selection as AliasNode).alias;
+      return alias.kind === "IdentifierNode"
+        ? (alias as IdentifierNode).name
+        : undefined;
+    }
+    case "ColumnNode":
+      return (selection as ColumnNode).column.name;
+    case "ReferenceNode": {
+      const column = (selection as ReferenceNode).column;
+      return column.kind === "ColumnNode"
+        ? (column as ColumnNode).column.name
+        : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** `*` or `table.*`, for a selection of all columns. */
+function selectedAll(node: OperationNode): string {
+  const selection = (node as SelectionNode).selection;
+  const table =
+    selection.kind === "ReferenceNode"
+      ? (selection as ReferenceNode).table?.table.identifier.name
+      : undefined;
+  return table === undefined ? "*" : `${table}.*`;
 }
 
 /**
