@@ -41,21 +41,39 @@ not on the npm registry: install it from the release tarball (see [Install](#ins
 
 ## Guides
 
-Guides, in `guides/` and in the API docs (`pnpm docs:build`):
+**Introduction**
 
-- [Getting started](guides/introduction/getting-started.md)
-- How-To's: [Aggregates and subqueries](guides/howtos/aggregates-and-subqueries.md),
-  [Constraints and upserts](guides/howtos/constraints-and-upserts.md),
-  [Data mapping and validation](guides/howtos/data-mapping-and-validation.md),
-  [Dynamic queries](guides/howtos/dynamic-queries.md),
-  [Self-referencing many to many](guides/howtos/self-referencing-many-to-many.md),
-  [Test factories](guides/howtos/test-factories.md)
-- [Testing with ekto](guides/testing/testing-with-ekto.md)
-- Migrations:
-  [Anatomy of a migration](guides/migrations/anatomy-of-a-migration.md),
-  [Safe migrations](guides/migrations/safe-migrations.md),
-  [Backfilling data](guides/migrations/backfilling-data.md),
-  [Squashing migrations](guides/migrations/squashing-migrations.md)
+- [Getting started](guides/introduction/getting-started.md): a Repo, a schema and a migration,
+  then inserting, querying, updating and deleting records.
+
+**How-to's**
+
+- [Aggregates and subqueries](guides/howtos/aggregates-and-subqueries.md): counts, sums and
+  queries inside queries.
+- [Constraints and upserts](guides/howtos/constraints-and-upserts.md): database constraints as
+  changeset errors, and inserts that update on conflict.
+- [Data mapping and validation](guides/howtos/data-mapping-and-validation.md): changesets for
+  forms that don't map one to one to a table.
+- [Dynamic queries](guides/howtos/dynamic-queries.md): building conditions and ordering from
+  user input.
+- [Self-referencing many to many](guides/howtos/self-referencing-many-to-many.md): records
+  related to records of the same table.
+- [Test factories](guides/howtos/test-factories.md): building and inserting test data.
+
+**Testing**
+
+- [Testing with ekto](guides/testing/testing-with-ekto.md): tests that each run in a
+  transaction that is rolled back.
+
+**Migrations**
+
+- [Anatomy of a migration](guides/migrations/anatomy-of-a-migration.md): what a migration runs,
+  in which transaction, and with which locks and timeouts.
+- [Safe migrations](guides/migrations/safe-migrations.md): changing a PostgreSQL database while
+  the application keeps running.
+- [Backfilling data](guides/migrations/backfilling-data.md): changing many rows in batches.
+- [Squashing migrations](guides/migrations/squashing-migrations.md): replacing old migrations
+  with a dump of the schema.
 
 ## Features
 
@@ -88,7 +106,8 @@ variant. Also upserts, bulk writes and optimistic locking. See [Repo](#repo).
 
 ```ts
 const result = await repo.insert(cs);
-if (!result.ok) traverseErrors(result.changeset); // { email: ["has already been taken"] }
+if (!result.ok) traverseErrors(result.changeset);
+// { email: ["has already been taken"] }
 
 await repo.insertAll(User, rows, { onConflict: "nothing" });
 ```
@@ -97,18 +116,22 @@ await repo.insertAll(User, rows, { onConflict: "nothing" });
 its transaction or test sandbox, and loads their rows as records. See [Queries](#queries).
 
 ```ts
-const published = from(Post).where("status", "=", "published").limit(10);
+const published = from(Post).where("status", "=", "published");
 
 await repo.all(published); // Post[]
-repo.toSql(published); // { sql: 'select "posts"."id", … limit $2', params: ["published", 10] }
+repo.toSql(published);
+// { sql: 'select … where "status" = $1', params: ["published"] }
 ```
 
 **Associations are loaded explicitly**, one query per association, never lazily: `belongsTo`,
 `hasMany`, `hasOne` and `manyToMany`. See [Preloads](#preloads).
 
 ```ts
-const users = await repo.preload(await repo.all(User), { posts: "author" });
-const comments = await repo.all(repo.assoc(post, "comments").orderBy("id"));
+const users = await repo.all(User);
+const withPosts = await repo.preload(users, { posts: "author" });
+
+const query = repo.assoc(post, "comments").orderBy("id");
+const comments = await repo.all(query); // Comment[]
 ```
 
 **Transactions, and `Multi` for named steps** that see each other's results and commit or roll
@@ -155,10 +178,12 @@ comes from the tarball of a [GitHub release](https://github.com/cosmic-byte-labs
 
 ```bash
 # PostgreSQL
-npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely pg
+npm install kysely pg \
+  https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz
 
 # SQLite
-npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely sqlite3
+npm install kysely sqlite3 \
+  https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz
 ```
 
 The docs use npm; pnpm, yarn and bun work the same way (`pnpm add`, `yarn add` or `bun add`, and
@@ -243,7 +268,8 @@ const result = await repo.insert(
 if (result.ok) {
   console.log(result.value.id); // the generated id
 } else {
-  console.log(traverseErrors(result.changeset)); // { email: ["has already been taken"] }
+  console.log(traverseErrors(result.changeset));
+  // { email: ["has already been taken"] }
 }
 
 const ann = await repo.getBy(User, { email: "ann@example.com" });
@@ -299,7 +325,9 @@ await repo.insertAll(
 await repo.updateAll(User, { set: { name: null } }, (q) =>
   q.where("id", ">", 100),
 );
-await repo.deleteAll(User, (q) => q.where("email", "like", "%@spam.example"));
+await repo.deleteAll(User, (q) =>
+  q.where("email", "like", "%@spam.example"),
+);
 ```
 
 Upserts use `onConflict` (`"raise"`, `"nothing"`, `"replaceAll"`, `{ replace: [...] }` or
@@ -319,7 +347,8 @@ export const Post = schema("posts", {
   body: t.string({ nullable: true }),
   status: t.enum(["draft", "published"], { default: "draft" }),
   tags: t.array(t.string, { default: [] }),
-  views: t.integer({ readAfterWrites: true }), // a database default, read back after writes
+  // a database default, read back after writes
+  views: t.integer({ readAfterWrites: true }),
   author_id: t.integer(),
   ...t.timestamps(), // inserted_at and updated_at
 });
@@ -350,7 +379,10 @@ other:
 ```ts
 import { belongsTo, hasMany, schema, t } from "ekto";
 
-export class User extends schema("users", { id: t.id(), email: t.string() }) {
+export class User extends schema("users", {
+  id: t.id(),
+  email: t.string(),
+}) {
   static associations = {
     posts: hasMany(() => Post, { foreignKey: "author_id" }),
   };
@@ -416,7 +448,10 @@ Each error is a message template and its metadata, so it can be translated or re
 
 ```ts
 traverseErrors(cs);
-// { title: ["should be at least 3 character(s)"], author_id: ["can't be blank"] }
+// {
+//   title: ["should be at least 3 character(s)"],
+//   author_id: ["can't be blank"],
+// }
 ```
 
 Other validations: `validateFormat`, `validateExclusion`, `validateSubset`,
@@ -438,7 +473,8 @@ const cs = pipe(
 );
 
 const result = await repo.insert(cs);
-if (!result.ok) traverseErrors(result.changeset); // { author_id: ["does not exist"] }
+if (!result.ok) traverseErrors(result.changeset);
+// { author_id: ["does not exist"] }
 ```
 
 Unique and foreign key constraint names default to `<table>_<column>_index` and
@@ -478,7 +514,10 @@ of Kysely's expression builder:
 
 ```ts
 from(Post).where((eb) =>
-  eb.or([eb("status", "=", "published"), eb("author_id", "=", authorId)]),
+  eb.or([
+    eb("status", "=", "published"),
+    eb("author_id", "=", authorId),
+  ]),
 );
 ```
 
@@ -553,14 +592,16 @@ const users = await repo.all(
 Associations are loaded explicitly with `repo.preload`, one query per association:
 
 ```ts
-const user = await repo.preload(await repo.getOrThrow(User, 1), "posts");
-user.posts; // Post[]
+const user = await repo.getOrThrow(User, 1);
+const withPosts = await repo.preload(user, "posts");
+withPosts.posts; // Post[]
 
-const posts = await repo.preload(await repo.all(Post), { author: true });
-posts[0]?.author; // User
+const posts = await repo.preload(await repo.all(Post), "author");
+posts[0]?.author; // User | null
 
+// posts ordered by a query, then each post's author
 const users = await repo.preload(await repo.all(User), {
-  posts: [(q) => q.orderBy("id", "desc"), "author"], // refined, then nested
+  posts: [(q) => q.orderBy("id", "desc"), "author"],
 });
 ```
 
@@ -602,7 +643,9 @@ import { Multi } from "ekto";
 
 const multi = Multi.new<DB>()
   .insert("user", changeset(User.new(), params))
-  .insert("post", ({ user }) => buildAssoc(user, "posts", { title: "Hello" }))
+  .insert("post", ({ user }) =>
+    buildAssoc(user, "posts", { title: "Hello" }),
+  )
   .run("welcome", async (tx, { user }) => {
     await sendWelcome(user);
     return { ok: true, value: null };
@@ -628,7 +671,12 @@ Migrations live in `migrations/`, named `<version>_<name>.ts`, and default-expor
 
 ```ts
 // migrations/20260115103000_create_users.ts
-import { migration, references, table, uniqueIndex } from "ekto/migrate";
+import {
+  migration,
+  references,
+  table,
+  uniqueIndex,
+} from "ekto/migrate";
 
 export default migration({
   change(m) {
@@ -643,9 +691,8 @@ export default migration({
     m.create(table("posts"), (t) => {
       t.add("id", "bigserial", { primaryKey: true });
       t.add("title", "string", { null: false });
-      t.add("author_id", references("users", { onDelete: "deleteAll" }), {
-        null: false,
-      });
+      const users = references("users", { onDelete: "deleteAll" });
+      t.add("author_id", users, { null: false });
       t.timestamps();
     });
   },
@@ -675,14 +722,17 @@ export default {
 ```
 
 ```bash
-ekto migrate                  # run pending migrations (--step N, --to VERSION, --all)
-ekto rollback                 # roll back the last migration (--step N, --to VERSION, --all)
+ekto migrate                  # run pending migrations
+ekto rollback                 # roll back the last migration
 ekto status                   # list migrations and whether they ran
-ekto gen.migration add_posts  # create migrations/<timestamp>_add_posts.ts
-ekto gen.schema Post posts title body:text author_id:references:users
-                              # create a schema with a changeset, and its migration
-ekto gen.schemas              # write schemas for the tables of an existing database
+ekto gen.migration add_posts  # create an empty migration
+ekto gen.schema Post posts title body:text
+                              # create a schema and its migration
+ekto gen.schemas              # write schemas for an existing database
 ```
+
+`migrate` and `rollback` take `--step N`, `--to VERSION` or `--all`. `gen.migration` creates
+`migrations/<timestamp>_add_posts.ts`, and `gen.schema` creates a schema with a changeset.
 
 `migrate`, `rollback` and `status` start the Repo with a pool of 2 (`--pool-size N`). On PostgreSQL
 the migration lock holds one connection while another runs the migration, so a pool of one fails.
@@ -720,7 +770,7 @@ import { test } from "node:test";
 import { sandbox } from "ekto/testing";
 import { repo } from "../src/repo.ts";
 
-sandbox(repo); // every test in this file gets its own rolled-back transaction
+sandbox(repo); // each test runs in a transaction that is rolled back
 
 test("creates a user", async () => {
   await createUser({ email: "ann@example.com" }); // uses repo
@@ -822,9 +872,11 @@ Needs Node 26 (24.3+ works) and pnpm 12. Notes for coding agents are in [AGENTS.
 
 ```bash
 pnpm install
-pnpm check                          # lint, typecheck, tests, build, API docs
-pnpm test                           # node --test over src/**/*.test.ts
-EKTO_PG_URL=postgres://… pnpm test  # also run the Repo tests against PostgreSQL
-pnpm format                         # Biome: fix formatting and lint
-pnpm docs:build                     # API docs and guides with TypeDoc, in docs/api
+pnpm check        # lint, typecheck, tests, build, API docs
+pnpm test         # node --test over src/**/*.test.ts
+pnpm format       # Biome: fix formatting and lint
+pnpm docs:build   # API docs and guides with TypeDoc, in docs/api
+
+# also run the Repo tests against PostgreSQL
+EKTO_PG_URL=postgres://… pnpm test
 ```

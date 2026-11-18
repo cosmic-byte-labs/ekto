@@ -51,8 +51,10 @@ export default migration({
     });
 
     m.execute(async () => {
-      await repo.updateAll(Post, { set: { new_data: "some data" } }, (q) =>
-        q.where("new_data", "is", null),
+      await repo.updateAll(
+        Post,
+        { set: { new_data: "some data" } },
+        (q) => q.where("new_data", "is", null),
       );
     });
   },
@@ -142,7 +144,11 @@ script your deployment runs, with `createMigrator` and the data migrations' fold
 
 ```ts
 // scripts/migrate-data.ts
-import { createMigrator, fileMigrations, type RunOptions } from "ekto/migrate";
+import {
+  createMigrator,
+  fileMigrations,
+  type RunOptions,
+} from "ekto/migrate";
 import { repo } from "../src/repo.ts";
 
 // Migrate data in the database. Defaults to migrating to the latest,
@@ -202,7 +208,8 @@ async function doChange(db: Kysely<any>, batchOfIds: string[]) {
     .returning("id")
     .execute();
   const results = new Set(rows.map((row) => row.id));
-  for (const id of batchOfIds) if (!results.has(id)) handleNonUpdate(id);
+  for (const id of batchOfIds)
+    if (!results.has(id)) handleNonUpdate(id);
 }
 
 function pageQuery(db: Kysely<any>, lastId: string) {
@@ -226,7 +233,9 @@ async function throttleChangeInBatches(
   lastPos = "0",
 ) {
   for (;;) {
-    const ids = (await query(db, lastPos).execute()).map((row) => row.id);
+    const ids = (await query(db, lastPos).execute()).map(
+      (row) => row.id,
+    );
     if (ids.length === 0) return;
     await change(db, ids);
     lastPos = ids[ids.length - 1];
@@ -358,7 +367,9 @@ function doChange(db: Kysely<MigratingDatabase>, batchOfIds: string[]) {
       .forUpdate()
       .execute();
     const now = new Date();
-    const mutations = records.flatMap((record) => mutation(record, now));
+    const mutations = records.flatMap((record) =>
+      mutation(record, now),
+    );
 
     // Don't be fooled by the name insertInto, this is actually an upsert
     // that will update existing records when conflicting; they should all
@@ -378,9 +389,13 @@ function doChange(db: Kysely<MigratingDatabase>, batchOfIds: string[]) {
             .returning("id")
             .execute();
     const updated = new Set(results.map((row) => row.id));
-    for (const { id } of mutations) if (!updated.has(id)) handleNonUpdate(id);
+    for (const { id } of mutations)
+      if (!updated.has(id)) handleNonUpdate(id);
 
-    await tx.deleteFrom(tempTableName).where("id", "in", batchOfIds).execute();
+    await tx
+      .deleteFrom(tempTableName)
+      .where("id", "in", batchOfIds)
+      .execute();
   });
 }
 
@@ -427,7 +442,9 @@ async function throttleChangeInBatches(
   lastPos = "0",
 ) {
   for (;;) {
-    const ids = (await query(db, lastPos).execute()).map((row) => row.id);
+    const ids = (await query(db, lastPos).execute()).map(
+      (row) => row.id,
+    );
     if (ids.length === 0) return;
     await change(db, ids);
     lastPos = ids[ids.length - 1];

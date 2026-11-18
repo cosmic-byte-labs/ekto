@@ -101,7 +101,13 @@ maintainability by allowing us to isolate core functions for relationships in th
 Let's take a look at our migration:
 
 ```ts
-import { index, migration, references, table, uniqueIndex } from "ekto/migrate";
+import {
+  index,
+  migration,
+  references,
+  table,
+  uniqueIndex,
+} from "ekto/migrate";
 
 export default migration({
   change(m) {
@@ -131,12 +137,17 @@ constraint when working with our changeset.
 
 ```ts
 // In src/relationships/relationship.ts
-import { type Changeset, cast, type New, pipe, uniqueConstraint } from "ekto";
+import {
+  type Changeset,
+  cast,
+  type New,
+  pipe,
+  uniqueConstraint,
+} from "ekto";
 
-export function changeset<D extends Relationship | New<typeof Relationship>>(
-  relationship: D | Changeset<D>,
-  params: unknown = {},
-): Changeset<D> {
+export function changeset<
+  D extends Relationship | New<typeof Relationship>,
+>(relationship: D | Changeset<D>, params: unknown = {}): Changeset<D> {
   return pipe(
     cast(relationship, params, ["person_id", "relation_id"]),
     uniqueConstraint(["person_id", "relation_id"], {
@@ -151,7 +162,10 @@ the two records in the database: inserting a relationship is inserting a `Relati
 
 ```ts
 await repo.insert(
-  changeset(Relationship.new(), { person_id: ann.id, relation_id: bob.id }),
+  changeset(Relationship.new(), {
+    person_id: ann.id,
+    relation_id: bob.id,
+  }),
 );
 ```
 

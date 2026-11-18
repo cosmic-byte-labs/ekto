@@ -213,7 +213,9 @@ export default migration({
 export default migration({
   change(m) {
     m.alter(table("comments"), (t) => {
-      t.add("some_timestamp", "utc_datetime", { default: fragment("now()") });
+      t.add("some_timestamp", "utc_datetime", {
+        default: fragment("now()"),
+      });
       // A volatile value
     });
   },
@@ -540,7 +542,9 @@ checked.
 export default migration({
   change(m) {
     m.create(
-      constraint("products", "price_must_be_positive", { check: "price > 0" }),
+      constraint("products", "price_must_be_positive", {
+        check: "price > 0",
+      }),
     );
     // Creating the constraint with validate: true (the default when
     // unspecified) will perform a full table scan and acquires a lock
@@ -672,7 +676,9 @@ reversed in `change`, the migration has `up` and `down`:
 ```ts
 export default migration({
   up(m) {
-    m.execute("ALTER TABLE products VALIDATE CONSTRAINT active_not_null");
+    m.execute(
+      "ALTER TABLE products VALIDATE CONSTRAINT active_not_null",
+    );
     m.execute("ALTER TABLE products ALTER COLUMN active SET NOT NULL");
     m.drop(
       constraint("products", "active_not_null", {
@@ -793,7 +799,9 @@ Second deployment (backfill existing rows):
 ```ts
 export default migration({
   up(m) {
-    m.execute("UPDATE posts SET status = 'draft' WHERE status = 'obsolete'");
+    m.execute(
+      "UPDATE posts SET status = 'draft' WHERE status = 'obsolete'",
+    );
   },
 });
 ```
@@ -833,7 +841,10 @@ cannot run inside a transaction block.
 ```ts
 export default migration({
   change(m) {
-    m.execute('CREATE EXTENSION "uuid-ossp"', 'DROP EXTENSION "uuid-ossp"');
+    m.execute(
+      'CREATE EXTENSION "uuid-ossp"',
+      'DROP EXTENSION "uuid-ossp"',
+    );
   },
 });
 ```

@@ -28,7 +28,10 @@ const factories = {
   comment: () => Comment.new({ body: "good post" }),
   user: () => {
     unique++;
-    return User.new({ email: `hello${unique}`, username: `hello${unique}` });
+    return User.new({
+      email: `hello${unique}`,
+      username: `hello${unique}`,
+    });
   },
 };
 
@@ -54,8 +57,12 @@ export function insert<K extends keyof Factories>(
 export async function insertPostWithComments() {
   const post = await insert("post", { title: "hello with comments" });
   const comments = [
-    await repo.insertOrThrow(buildAssoc(post, "comments", { body: "first" })),
-    await repo.insertOrThrow(buildAssoc(post, "comments", { body: "second" })),
+    await repo.insertOrThrow(
+      buildAssoc(post, "comments", { body: "first" }),
+    ),
+    await repo.insertOrThrow(
+      buildAssoc(post, "comments", { body: "second" }),
+    ),
   ];
   return { ...post, comments };
 }

@@ -155,7 +155,10 @@ import { cast, pipe, schemaless, types, validateRequired } from "ekto";
 
 const search = pipe(
   cast(
-    schemaless({ query: types.string, page: types.integer }, { page: 1 }),
+    schemaless(
+      { query: types.string, page: types.integer },
+      { page: 1 },
+    ),
     params,
     ["query", "page"],
   ),

@@ -31,7 +31,9 @@ await repo.aggregate(Post, "avg", "visits");
 Behind the scenes, the query above translates to:
 
 ```ts
-await repo.one(from("posts").select((eb) => eb.fn.avg("visits").as("value")));
+await repo.one(
+  from("posts").select((eb) => eb.fn.avg("visits").as("value")),
+);
 ```
 
 `repo.aggregate` supports `count`, `avg`, `sum`, `min` and `max`. On a schema, the result is
@@ -73,7 +75,9 @@ above is rather equivalent to:
 const innerQuery = from(Post).orderBy("visits", "desc").limit(10);
 
 await repo.one(
-  from(innerQuery.as("q")).select((eb) => eb.fn.avg("q.visits").as("value")),
+  from(innerQuery.as("q")).select((eb) =>
+    eb.fn.avg("q.visits").as("value"),
+  ),
 );
 ```
 
@@ -98,7 +102,9 @@ query won't type check. Let's revisit the aggregate query we saw in the previous
 const innerQuery = from(Post).orderBy("visits", "desc").limit(10);
 
 await repo.one(
-  from(innerQuery.as("q")).select((eb) => eb.fn.avg("q.visits").as("value")),
+  from(innerQuery.as("q")).select((eb) =>
+    eb.fn.avg("q.visits").as("value"),
+  ),
 );
 ```
 

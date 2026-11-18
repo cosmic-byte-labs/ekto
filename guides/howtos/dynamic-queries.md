@@ -132,7 +132,10 @@ function filterOrderBy(orderBy: string | undefined) {
   };
 }
 
-function filterWhere(eb: ExpressionBuilder<DB, "posts">, params: Params) {
+function filterWhere(
+  eb: ExpressionBuilder<DB, "posts">,
+  params: Params,
+) {
   const conditions = [];
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined) continue;

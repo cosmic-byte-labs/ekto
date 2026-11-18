@@ -17,7 +17,12 @@ Not only that, a given tag may also belong to many posts. This is a classic scen
 would use {@link ekto!manyToMany | manyToMany} associations. Our migration would look like:
 
 ```ts
-import { migration, references, table, uniqueIndex } from "ekto/migrate";
+import {
+  migration,
+  references,
+  table,
+  uniqueIndex,
+} from "ekto/migrate";
 
 export default migration({
   change(m) {
@@ -110,7 +115,9 @@ export async function createPost(params: {
     await repo.exec(
       kysely
         .insertInto("posts_tags")
-        .values(tags.map((tag) => ({ post_id: post.id, tag_id: tag.id }))),
+        .values(
+          tags.map((tag) => ({ post_id: post.id, tag_id: tag.id })),
+        ),
     );
   return post;
 }
@@ -183,7 +190,9 @@ the following:
 
 ```ts
 async function getOrInsertTag(name: string) {
-  return (await repo.getBy(Tag, { name })) ?? (await maybeInsertTag(name));
+  return (
+    (await repo.getBy(Tag, { name })) ?? (await maybeInsertTag(name))
+  );
 }
 
 async function maybeInsertTag(name: string) {
@@ -217,7 +226,9 @@ Your first try in using `onConflict` may be by setting it to `"nothing"`, as bel
 
 ```ts
 async function getOrInsertTag(name: string) {
-  return repo.insertOrThrow(Tag.new({ name }), { onConflict: "nothing" });
+  return repo.insertOrThrow(Tag.new({ name }), {
+    onConflict: "nothing",
+  });
 }
 ```
 

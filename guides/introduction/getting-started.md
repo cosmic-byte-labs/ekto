@@ -30,7 +30,8 @@ ekto builds its queries with, and `pg` (node-postgres), the driver that talks to
 ekto is not on the npm registry; it comes from the tarball of its GitHub release:
 
 ```bash
-npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely pg
+npm install kysely pg \
+  https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz
 ```
 
 (This guide uses npm; pnpm, yarn and bun work just as well.)
@@ -387,7 +388,10 @@ Since this changeset has errors, no new record was inserted into the `people` ta
 Let's try now with some valid data.
 
 ```ts
-const cs = changeset(Person.new(), { first_name: "Ryan", last_name: "Bigg" });
+const cs = changeset(Person.new(), {
+  first_name: "Ryan",
+  last_name: "Bigg",
+});
 ```
 
 We start out here with a new person record. We then create a changeset for that person which has
@@ -442,7 +446,12 @@ what would be returned:
   {
     field: "bio",
     message: "should be at least %{count} character(s)",
-    meta: { count: 15, validation: "length", kind: "min", type: "string" },
+    meta: {
+      count: 15,
+      validation: "length",
+      kind: "min",
+      type: "string",
+    },
   },
   {
     field: "first_name",
@@ -476,7 +485,9 @@ One more final thing to mention here: you can trigger an exception to be thrown 
 a quick example of that:
 
 ```ts
-await repo.insertOrThrow(changeset(Person.new(), { first_name: "Ryan" }));
+await repo.insertOrThrow(
+  changeset(Person.new(), { first_name: "Ryan" }),
+);
 ```
 
 ```
@@ -694,7 +705,9 @@ Let's fetch the first person from our database and change their age. First, we'l
 person:
 
 ```ts
-const person = await repo.oneOrThrow(from(Person).orderBy("id").limit(1));
+const person = await repo.oneOrThrow(
+  from(Person).orderBy("id").limit(1),
+);
 ```
 
 Next, we'll build a changeset. We need to build a changeset because if we just create a new
@@ -781,7 +794,8 @@ will be `true`, but if it fails then it will be `false`.
 To follow this guide with SQLite instead of PostgreSQL, install `sqlite3` instead of `pg`:
 
 ```bash
-npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely sqlite3
+npm install kysely sqlite3 \
+  https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz
 ```
 
 and use the SQLite adapter, with the path of the database file, in `src/repo.ts` and
