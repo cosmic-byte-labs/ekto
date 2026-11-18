@@ -50,6 +50,7 @@ const Post = schema("q_posts", {
   user_id: t.integer(),
   views: t.integer().default(0),
   draft: t.boolean().virtual(),
+  score: t.integer().virtual(),
 });
 
 const Other = schema("q_others", { id: t.id() });
@@ -190,6 +191,32 @@ describe("queries", () => {
     assert.ok(Object.isFrozen(other));
   });
 
+  test("types: a from(Schema) query selects besides only the schema's fields", () => {
+    const repo = undefined as unknown as Repo<DB>;
+    const typeOnly = () => {
+      repo.all(from(Post).select("title"));
+      repo.all(from(Post).select(ksql<boolean>`true`.as("draft")));
+      repo.all(from(Post).clearSelect().select(ksql<number>`1`.as("one")));
+      repo.all(from("q_posts").select(ksql<number>`1`.as("one")));
+      repo.all(
+        // @ts-expect-error: email is not a field of Post
+        from(Post)
+          .innerJoin("q_users", "q_users.id", "q_posts.user_id")
+          .select("q_users.email"),
+      );
+      // @ts-expect-error: one is not a field of Post
+      repo.one(from(Post).select(ksql<number>`1`.as("one")));
+      // @ts-expect-error: one is not a field of Post
+      repo.oneOrThrow(from(Post).select(ksql<number>`1`.as("one")));
+      Multi.new<DB>()
+        // @ts-expect-error: one is not a field of Post
+        .all("posts", from(Post).select(ksql<number>`1`.as("one")))
+        // @ts-expect-error: one is not a field of Post
+        .one("post", () => from(Post).select(ksql<number>`1`.as("one")));
+    };
+    assert.equal(typeof typeOnly, "function");
+  });
+
   test("types", () => {
     const posts = from(Post).where("title", "like", "E%").orderBy("id");
     type _row = Expect<Equal<ResultOf<typeof posts>, Infer<typeof Post>>>;
@@ -326,11 +353,14 @@ function suite(
           .select((eb) => [
             eb.fn<string>("upper", ["title"]).as("title"),
             eb.lit(true).as("draft"),
+            // a bigint, which node-postgres returns as a string
+            ksql<string>`cast(views * 10 as bigint)`.as("score"),
           ])
           .where("title", "=", "Ecto"),
       );
       assert.equal(post?.title, "ECTO");
-      assert.equal(Boolean(post?.draft), true);
+      assert.equal(post?.draft, true, "loaded with the field's type");
+      assert.equal(post?.score, 30, "loaded with the field's type");
       assert.equal(getMeta(post ?? {})?.schema, Post);
       const [plain] = await repo.all(from(Post).where("title", "=", "Ecto"));
       assert.equal(plain?.draft, Post.new().draft, "not selected: its default");
@@ -338,10 +368,12 @@ function suite(
       events.length = 0;
       const notAField = /from\(q_posts\) selects one, which is not a field/;
       await assert.rejects(
+        // @ts-expect-error: one is not a field of Post
         repo.all(from(Post).select(ksql<number>`1`.as("one"))),
         notAField,
       );
       assert.throws(
+        // @ts-expect-error: one is not a field of Post
         () => repo.toSql(from(Post).select(ksql<number>`1`.as("one"))),
         notAField,
       );

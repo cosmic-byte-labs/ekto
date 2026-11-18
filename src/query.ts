@@ -119,6 +119,35 @@ export type Unmarked<R> =
     ? { [K in keyof R as K extends typeof schemaBrand ? never : K]: R[K] }
     : R;
 
+/**
+ * Type check of a query given to a Repo: when it is a `from(Schema)` query,
+ * the columns it selects besides the table's must be fields of the schema
+ * (virtual fields), as `Repo.all` checks when it runs the query. It is
+ * `unknown` when the query passes, and otherwise an object type naming the
+ * columns, which the query lacks.
+ */
+export type CheckSelection<Q> =
+  // biome-ignore lint/suspicious/noExplicitAny: any table
+  Q extends SelectQueryBuilder<infer QDB, any, infer O>
+    ? 0 extends 1 & O
+      ? unknown
+      : [O] extends [SchemaRow<infer S extends AnySchema>]
+        ? NotFields<
+            Exclude<
+              Extract<keyof O, string>,
+              keyof S["fields"] | keyof Selectable<QDB[TableOf<QDB, S>]>
+            >
+          >
+        : unknown
+    : unknown;
+
+/** The error of `CheckSelection`, naming the columns that are not fields. */
+export type NotFields<C> = [C] extends [never]
+  ? unknown
+  : {
+      readonly "from(Schema) selects columns that are not fields of its schema": C;
+    };
+
 /** The table of a schema in `DB`. */
 type TableOf<DB, S extends AnySchema> = S["source"] & keyof DB & string;
 
@@ -164,8 +193,10 @@ export interface From<DB> extends SelectFromOf<DB> {
    *
    * Like Ecto's `select_merge` into a struct, it may select more columns
    * only for the schema's fields: a column named after a field overrides
-   * it, and one named after a virtual field sets it. Running or printing
-   * the query throws when it selects any other column, or `*`.
+   * it, and one named after a virtual field sets it, loaded with the
+   * field's type. Any other column fails type checking where the query is
+   * given to a Repo, and running or printing the query throws when it
+   * selects one, or `*`.
    *
    * ```ts
    * const posts = await repo.all(from(Post).where("title", "like", "Ecto%"));

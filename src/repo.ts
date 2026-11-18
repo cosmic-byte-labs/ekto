@@ -80,6 +80,7 @@ import {
 import {
   type AssocQuery,
   bindQuery,
+  type CheckSelection,
   isUnboundQuery,
   type SchemaRow,
   schemaOfQuery,
@@ -471,7 +472,7 @@ export interface Repo<DB = any> {
     schema: S,
     query: SchemaQuery<S, Q>,
   ): Promise<Infer<S>[]>;
-  all<Q extends Query>(query: Q): Promise<ResultOf<Q>[]>;
+  all<Q extends Query>(query: Q & CheckSelection<Q>): Promise<ResultOf<Q>[]>;
 
   /**
    * Like `all`, but returns one record (or row) or `null`, and throws
@@ -482,14 +483,18 @@ export interface Repo<DB = any> {
     schema: S,
     query: SchemaQuery<S, Q>,
   ): Promise<Infer<S> | null>;
-  one<Q extends Query>(query: Q): Promise<ResultOf<Q> | null>;
+  one<Q extends Query>(
+    query: Q & CheckSelection<Q>,
+  ): Promise<ResultOf<Q> | null>;
   /** Like `one`, but throws `NoResultsError` instead of returning `null`. */
   oneOrThrow<S extends AnySchema>(schema: S): Promise<Infer<S>>;
   oneOrThrow<S extends AnySchema, Q extends Query>(
     schema: S,
     query: SchemaQuery<S, Q>,
   ): Promise<Infer<S>>;
-  oneOrThrow<Q extends Query>(query: Q): Promise<ResultOf<Q>>;
+  oneOrThrow<Q extends Query>(
+    query: Q & CheckSelection<Q>,
+  ): Promise<ResultOf<Q>>;
 
   /**
    * Whether a schema's table, or a query, has any rows (Ecto's
@@ -564,7 +569,7 @@ export interface Repo<DB = any> {
    * // { sql: 'select "posts"."id", … from "posts" where "title" = $1', params: ["Ecto"] }
    * ```
    */
-  toSql(query: AnySchema | Query): Queryable;
+  toSql<Q extends AnySchema | Query>(query: Q & CheckSelection<Q>): Queryable;
 
   /**
    * Inserts many rows in one query (Ecto's `Repo.insert_all/3`). Values are
@@ -1034,7 +1039,16 @@ function bind<DB>(
   }
 
   function loadField(schema: AnySchema, field: string, raw: unknown): unknown {
-    const type = persistedField(schema, field);
+    return loadTyped(schema, field, persistedField(schema, field), raw);
+  }
+
+  /** Loads a raw column value with a field's type and the adapter's loader. */
+  function loadTyped(
+    schema: AnySchema,
+    field: string,
+    type: Type<unknown>,
+    raw: unknown,
+  ): unknown {
     const result = loadValue(
       type,
       raw === null || raw === undefined ? raw : adapter.load(type.type, raw),
@@ -1639,12 +1653,14 @@ function bind<DB>(
 
   /**
    * Loads a row of a `from(Schema)` query, setting the virtual fields it
-   * selects (Ecto's `select_merge` into a struct).
+   * selects (Ecto's `select_merge` into a struct), loaded with their types.
    */
   function loadSelected(schema: AnySchema, row: Values): object {
     const record = loadRow(schema, row) as Record<string, unknown>;
     for (const name of schema.virtualFields) {
-      if (Object.hasOwn(row, name)) record[name] = row[name];
+      if (!Object.hasOwn(row, name)) continue;
+      const { type } = schema.fields[name] as AnyField;
+      record[name] = loadTyped(schema, name, type, row[name]);
     }
     return record;
   }

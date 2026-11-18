@@ -404,8 +404,8 @@ const first = await repo.one(query.limit(1)); // Post | null
 The columns are qualified with the table (`posts.id, posts.title, …`), so joins keep the
 schema's columns. As with Ecto's `select_merge`, it may select more columns only for the
 schema's fields: one named after a field overrides it, and one named after a virtual field sets
-it (`.select((eb) => eb.fn.count("comments.id").as("comment_count"))`). Any other column, or
-`*`, throws. A query that selects something else is a query of plain rows, returned as the
+it (`.select((eb) => eb.fn.count("comments.id").as("comment_count"))`). Any other column fails type
+checking, and it or `*` throws. A query that selects something else is a query of plain rows, returned as the
 driver gives them: `from("posts")` (Kysely's `selectFrom`, of a table, an alias such as
 `"posts as p"` or a subquery, selecting nothing yet), or `from(Post)` after `clearSelect()`:
 

@@ -71,8 +71,10 @@ export {
 export type { PreloadOptions } from "./preloader.ts";
 export {
   type AssocQuery,
+  type CheckSelection,
   type From,
   type FromQuery,
+  type NotFields,
   type Queries,
   queries,
   type SchemaRow,

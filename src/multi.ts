@@ -29,6 +29,7 @@ import {
   Changeset,
   isChangeset,
 } from "./changeset.ts";
+import type { CheckSelection } from "./query.ts";
 import type {
   DeleteOptions,
   InsertAllEntry,
@@ -299,7 +300,7 @@ export class Multi<DB = any, C extends Changes = {}> {
   ): Multi<DB, Add<C, N, Infer<S>[]>>;
   all<N extends string, Q extends Query>(
     name: N,
-    query: Q | ((changes: C) => Q),
+    query: (Q & CheckSelection<Q>) | ((changes: C) => Q & CheckSelection<Q>),
   ): Multi<DB, Add<C, N, ResultOf<Q>[]>>;
   all(name: string, ...args: [unknown] | [unknown, unknown]): Multi<DB, C> {
     return this.#add(name, read("all", args));
@@ -320,7 +321,7 @@ export class Multi<DB = any, C extends Changes = {}> {
   ): Multi<DB, Add<C, N, Infer<S> | null>>;
   one<N extends string, Q extends Query>(
     name: N,
-    query: Q | ((changes: C) => Q),
+    query: (Q & CheckSelection<Q>) | ((changes: C) => Q & CheckSelection<Q>),
   ): Multi<DB, Add<C, N, ResultOf<Q> | null>>;
   one(name: string, ...args: [unknown] | [unknown, unknown]): Multi<DB, C> {
     return this.#add(name, read("one", args));
