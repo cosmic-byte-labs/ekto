@@ -82,14 +82,14 @@ Guides that follow Ecto's own, in `guides/` and in the API docs (`pnpm docs:buil
 
 ekto runs on Node 24.3 or later, and needs `kysely` and the driver of your database. ekto itself
 comes from the tarball of a [GitHub release](https://github.com/cosmic-byte-labs/ekto/releases)
-(change `1.1.0` in the URL for another version).
+(change `1.0.0` in the URL for another version).
 
 ```bash
 # PostgreSQL
-npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.1.0/ekto-1.1.0.tgz kysely pg
+npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely pg
 
 # SQLite
-npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.1.0/ekto-1.1.0.tgz kysely sqlite3
+npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely sqlite3
 ```
 
 The docs use npm; pnpm, yarn and bun work the same way (`pnpm add`, `yarn add` or `bun add`, and

@@ -30,7 +30,7 @@ ekto builds its queries with, and `pg` (node-postgres), the driver that talks to
 ekto is not on the npm registry; it comes from the tarball of its GitHub release:
 
 ```bash
-npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.1.0/ekto-1.1.0.tgz kysely pg
+npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely pg
 ```
 
 (This guide uses npm; pnpm, yarn and bun work just as well.)
@@ -765,7 +765,7 @@ will be `true`, but if it fails then it will be `false`.
 To follow this guide with SQLite instead of PostgreSQL, install `sqlite3` instead of `pg`:
 
 ```bash
-npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.1.0/ekto-1.1.0.tgz kysely sqlite3
+npm install https://github.com/cosmic-byte-labs/ekto/releases/download/v1.0.0/ekto-1.0.0.tgz kysely sqlite3
 ```
 
 and use the SQLite adapter, with the path of the database file, in `src/repo.ts` and

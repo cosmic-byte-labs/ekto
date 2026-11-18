@@ -22,12 +22,6 @@ pnpm docs:build                  # TypeDoc → docs/api/ (git-ignored); docs:che
 
 ## Conventions
 
-- **Changes go straight to `main`**, without pull requests: run `pnpm check`, commit and push.
-  Never force-push `main`.
-- **A release is a tag.** Pushing `v<version>` (matching `package.json` `version`) runs
-  `.github/workflows/release.yml`, which checks, packs and publishes the tarball as a GitHub
-  release; the install URLs in `README.md` and the getting-started guide name that version. Tag
-  only when the owner asks.
 - **pnpm only, for working on ekto.** Do not add `package-lock.json` or `yarn.lock`. The pnpm
   version is pinned in `package.json` `packageManager`. Users of the package can use any package
   manager: user-facing docs show npm (`npm install`, `npx ekto`).
