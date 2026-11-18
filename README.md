@@ -673,7 +673,7 @@ A Multi also has `update`, `delete`, `insertOrUpdate`, `insertAll`, `updateAll`,
 
 ## Migrations
 
-Migrations live in `migrations/`, named `<version>_<name>.ts`, and default-export a
+Migrations live in `migrations/`, named `<version>_<name>.ts` (or `.js`), and default-export a
 `migration()` from `ekto/migrate`:
 
 ```ts
@@ -739,7 +739,8 @@ ekto gen.schemas              # write schemas for an existing database
 ```
 
 `migrate` and `rollback` take `--step N`, `--to VERSION` or `--all`. `gen.migration` creates
-`migrations/<timestamp>_add_posts.ts`, and `gen.schema` creates a schema with a changeset.
+`migrations/<timestamp>_add_posts.ts`, and `gen.schema` creates a schema with a changeset. With
+`--js`, the generators write JavaScript files instead of TypeScript.
 
 `migrate`, `rollback` and `status` start the Repo with a pool of 2 (`--pool-size N`). On PostgreSQL
 the migration lock holds one connection while another runs the migration, so a pool of one fails.

@@ -65,6 +65,7 @@ describe("parseAttrs (mix phx.gen.schema attributes)", () => {
       /expected a schema name/,
     );
     assert.equal(schemaFile("Blog.PostComment"), "blog/post_comment.ts");
+    assert.equal(schemaFile("Blog.Post", "js"), "blog/post.js");
   });
 
   test("the generated sources", () => {
@@ -104,6 +105,21 @@ describe("parseAttrs (mix phx.gen.schema attributes)", () => {
       /cannot generate Kysely migrations/,
     );
   });
+
+  test("JavaScript sources have no types", () => {
+    const spec: SchemaSpec = {
+      name: "Post",
+      table: "posts",
+      attrs: parseAttrs(["title:unique"]),
+    };
+    const schema = schemaSource(spec, "js");
+    assert.match(schema, /export function changeset\(post, attrs\) \{/);
+    assert.doesNotMatch(schema, /\btype\b|Infer|New|Changeset/);
+    const kysely = kyselyMigrationSource(spec, postgres(), "js");
+    assert.match(kysely, /^export async function up\(db\) \{/);
+    assert.match(kysely, /export async function down\(db\) \{/);
+    assert.doesNotMatch(kysely, /Kysely|Promise|biome/);
+  });
 });
 
 const ROOT = new URL("../", import.meta.url);
@@ -137,6 +153,8 @@ function roundTrip(name: string, connect: () => Repo) {
       `gen_comments_${adapter.name}`,
       `gen_kposts_${adapter.name}`,
       `gen_authors_${adapter.name}`,
+      `gen_jposts_${adapter.name}`,
+      `gen_jkposts_${adapter.name}`,
       `gen_schema_migrations_${adapter.name}`,
     ];
     const drop = async () => {
@@ -263,6 +281,60 @@ function roundTrip(name: string, connect: () => Repo) {
       );
       await migration.down(db);
     });
+
+    test("JavaScript schemas and migrations work", async () => {
+      const posts = `gen_jposts_${adapter.name}`;
+      const kposts = `gen_jkposts_${adapter.name}`;
+      const attrs = parseAttrs(["title:unique", "score:float"]);
+      const [schemaPath, migrationPath] = await generateSchema(
+        { name: "JPost", table: posts, attrs },
+        {
+          schemasFolder: join(dir, "js", "schemas"),
+          migrationsFolder: join(dir, "js", "migrations"),
+          migration: "ekto",
+          language: "js",
+        },
+      );
+      const [kschemaPath, kmigrationPath] = await generateSchema(
+        { name: "JKPost", table: kposts, attrs },
+        {
+          schemasFolder: join(dir, "js", "schemas"),
+          migrationsFolder: join(dir, "js", "migrations"),
+          migration: "kysely",
+          adapter,
+          language: "js",
+        },
+      );
+      assert.ok(schemaPath && migrationPath && kschemaPath && kmigrationPath);
+      assert.match(schemaPath, /jpost\.js$/);
+      assert.match(migrationPath, /_create_gen_jposts_\w+\.js$/);
+
+      const migrator = createMigrator({
+        repo,
+        migrationSource: `gen_schema_migrations_${adapter.name}`,
+        migrations: {
+          [`20260103000000_create_${posts}`]: (await link(migrationPath))
+            .default,
+        },
+      });
+      await migrator.migrate();
+      const kmigration = await link(kmigrationPath);
+      await kmigration.up(db);
+      for (const path of [schemaPath, kschemaPath]) {
+        const module = await link(path);
+        const Schema = module.JPost ?? module.JKPost;
+        const post = await repo.insertOrThrow(
+          module.changeset(Schema.new(), { title: "a", score: "1.5" }),
+        );
+        assert.equal(post.score, 1.5);
+        const taken = await repo.insert(
+          module.changeset(Schema.new(), { title: "a", score: 1 }),
+        );
+        assert.equal(taken.ok, false);
+      }
+      await kmigration.down(db);
+      await migrator.rollback({ all: true });
+    });
   });
 }
 
@@ -312,6 +384,11 @@ describe("ekto gen.schema", () => {
       /user\.ts already exists/,
     );
     await assert.rejects(
+      main([...args, "--js"], () => {}),
+      /user\.ts already exists/,
+      "a schema in either language",
+    );
+    await assert.rejects(
       main(["gen.schema", "User"], () => {}),
       /usage: ekto gen.schema/,
     );
@@ -321,6 +398,23 @@ describe("ekto gen.schema", () => {
       (l) => lines.push(l),
     );
     assert.deepEqual(lines, [`* creating ${join(dir, "person.ts")}`]);
+    lines.length = 0;
+    await main(
+      [
+        "gen.schema",
+        "Robot",
+        "robots",
+        "--js",
+        "--schemas",
+        dir,
+        "--migrations",
+        dir,
+      ],
+      (l) => lines.push(l),
+    );
+    assert.equal(lines.length, 2);
+    assert.equal(lines[0], `* creating ${join(dir, "robot.js")}`);
+    assert.match(lines[1] ?? "", /_create_robots\.js$/);
     await assert.rejects(
       main([...args, "--migration", "kysely"], () => {}),
       /Kysely migrations need the adapter/,

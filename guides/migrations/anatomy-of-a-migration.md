@@ -28,7 +28,8 @@ npx ekto gen.migration create_weather_table
 > in fields and types. See `npx ekto --help` for more information.
 
 This command will generate a file in `migrations/`, or in the `migrationsFolder` of
-`ekto.config.ts`.
+`ekto.config.ts`. In a JavaScript project, `--js` generates a `.js` file instead; the migration is
+the same, as it has no types.
 
 Let's look at that file:
 

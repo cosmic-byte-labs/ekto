@@ -28,11 +28,9 @@ describe("ekto gen", () => {
 
   test("writes a timestamped migration (mix ecto.gen.migration)", async () => {
     const folder = join(dir, "migrations");
-    const file = await generate(
-      folder,
-      "AddUsersTable",
-      new Date("2026-01-15T10:30:05.123Z"),
-    );
+    const file = await generate(folder, "AddUsersTable", {
+      now: new Date("2026-01-15T10:30:05.123Z"),
+    });
     assert.equal(file, join(folder, "20260115103005_add_users_table.ts"));
     assert.match(await readFile(file, "utf8"), /export default migration\(\{/);
     await assert.rejects(
@@ -40,6 +38,20 @@ describe("ekto gen", () => {
       /migration name add_users_table is already used by 20260115103005_add_users_table.ts/,
     );
     await assert.rejects(generate(folder, "--"), /expected a migration name/);
+  });
+
+  test("--js writes a JavaScript migration", async () => {
+    const folder = join(dir, "js");
+    const lines: string[] = [];
+    const args = ["gen.migration", "add_posts", "--migrations", folder];
+    assert.equal(await main([...args, "--js"], (l) => lines.push(l)), 0);
+    const file = lines[0]?.replace("* creating ", "") ?? "";
+    assert.match(file, /\d{14}_add_posts\.js$/);
+    assert.match(await readFile(file, "utf8"), /export default migration\(\{/);
+    await assert.rejects(
+      main(args, () => {}),
+      /add_posts is already used by \d{14}_add_posts\.js/,
+    );
   });
 });
 

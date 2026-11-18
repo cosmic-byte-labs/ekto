@@ -19,6 +19,7 @@ import {
   generate,
   generateSchema,
   generateSchemas,
+  type Language,
   type MigrationFormat,
   parseAttrs,
 } from "./gen.ts";
@@ -84,6 +85,7 @@ options:
   --no-migration        as --migration none
   --binary-id           gen.schema: UUID primary key and references
   --no-binary-id        gen.schema: bigserial primary key (overrides the configuration)
+  --js                  gen.*: write JavaScript files instead of TypeScript
 `;
 
 async function loadConfig(path: string | undefined): Promise<EktoConfig> {
@@ -137,10 +139,12 @@ export async function main(
       "no-migration": { type: "boolean" },
       "binary-id": { type: "boolean" },
       "no-binary-id": { type: "boolean" },
+      js: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
   const [command, ...rest] = positionals;
+  const language: Language = values.js ? "js" : "ts";
   if (values.help || command === undefined) {
     out(USAGE);
     return command === undefined && !values.help ? 1 : 0;
@@ -174,7 +178,9 @@ export async function main(
     if (command === "gen.migration") {
       if (rest.length !== 1)
         throw new Error("usage: ekto gen.migration <name>");
-      files = [await generate(migrationsFolder, rest[0] as string)];
+      files = [
+        await generate(migrationsFolder, rest[0] as string, { language }),
+      ];
     } else {
       const [name, table, ...attrs] = rest;
       if (name === undefined || table === undefined)
@@ -198,6 +204,7 @@ export async function main(
               config?.migrationFormat ??
               "ekto"),
           ...(config && { adapter: config.repo.adapter }),
+          language,
         },
       );
     }
@@ -225,6 +232,7 @@ export async function main(
           schemasFolder:
             values.schemas ?? config.schemasFolder ?? "src/schemas",
           ...(tables && { tables }),
+          language,
           exclude: [
             config.migrationSource ?? "schema_migrations",
             "kysely_migration",

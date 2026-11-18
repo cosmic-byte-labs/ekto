@@ -33,6 +33,9 @@ export function underscore(name: string): string {
     .toLowerCase();
 }
 
+/** The language of generated files: TypeScript (the default) or JavaScript. */
+export type Language = "ts" | "js";
+
 const MIGRATION_TEMPLATE = `import { migration } from "ekto/migrate";
 
 export default migration({
@@ -41,16 +44,24 @@ export default migration({
 `;
 
 /**
- * Creates `<folder>/<timestamp>_<name>.ts` with `contents` (an empty
- * migration by default) and returns its path. Names must be unique, as
- * Ecto requires.
+ * Creates `<folder>/<timestamp>_<name>.ts` (or `.js`) with `contents` (an
+ * empty migration by default), at `now`, and returns its path. Names must be unique,
+ * as Ecto requires.
  */
 export async function generate(
   folder: string,
   name: string,
-  now = new Date(),
-  contents = MIGRATION_TEMPLATE,
+  options: {
+    readonly now?: Date;
+    readonly contents?: string;
+    readonly language?: Language;
+  } = {},
 ): Promise<string> {
+  const {
+    now = new Date(),
+    contents = MIGRATION_TEMPLATE,
+    language = "ts",
+  } = options;
   const base = underscore(name);
   if (base === "")
     throw new Error(`expected a migration name, got ${JSON.stringify(name)}`);
@@ -60,7 +71,7 @@ export async function generate(
   );
   if (existing)
     throw new Error(`migration name ${base} is already used by ${existing}`);
-  const file = join(folder, `${timestamp(now)}_${base}.ts`);
+  const file = join(folder, `${timestamp(now)}_${base}.${language}`);
   await writeFile(file, contents, { flag: "wx" });
   return file;
 }
@@ -194,8 +205,14 @@ export interface SchemaSpec {
 }
 
 /** The schema's file, relative to the schemas folder: `Blog.Post` is `blog/post.ts`. */
-export function schemaFile(name: string): string {
-  return `${name.split(".").map(underscore).join("/")}.ts`;
+export function schemaFile(name: string, language: Language = "ts"): string {
+  return `${name.split(".").map(underscore).join("/")}.${language}`;
+}
+
+/** The schema's file if it exists, in either language. */
+function existingSchemaFile(file: string): string | undefined {
+  const base = file.replace(/\.[jt]s$/, "");
+  return [`${base}.ts`, `${base}.js`].find((f) => existsSync(f));
 }
 
 function checkSpec(spec: SchemaSpec) {
@@ -221,11 +238,15 @@ interface ModuleField {
   readonly unique?: string | true;
 }
 
-/** The schema module: the schema, its record type and a changeset function. */
+/**
+ * The schema module: the schema, its record type (in TypeScript) and a
+ * changeset function.
+ */
 function renderSchema(
   name: string,
   table: string,
   fields: readonly ModuleField[],
+  language: Language,
 ): string {
   const short = name.split(".").at(-1) as string;
   const param = short[0]?.toLowerCase() + short.slice(1);
@@ -236,11 +257,11 @@ function renderSchema(
   const unique = fields.flatMap((f) =>
     f.cast && f.unique ? [[f.cast, f.unique] as const] : [],
   );
+  const ts = language === "ts";
   const imports = [
-    "type Changeset",
+    ...(ts ? ["type Changeset"] : []),
     "cast",
-    "type Infer",
-    "type New",
+    ...(ts ? ["type Infer", "type New"] : []),
     "pipe",
     "schema",
     "t",
@@ -255,6 +276,15 @@ function renderSchema(
         `uniqueConstraint(${JSON.stringify(field)}${index === true ? "" : `, { name: ${JSON.stringify(index)} }`})`,
     ),
   ];
+  const signature = ts
+    ? `export type ${short} = Infer<typeof ${short}>;
+
+export function changeset<D extends ${short} | New<typeof ${short}>>(
+  ${param}: D | Changeset<D>,
+  attrs: unknown,
+): Changeset<D> {`
+    : `
+export function changeset(${param}, attrs) {`;
   return `import {
 ${imports.map((i) => `  ${i},`).join("\n")}
 } from "ekto";
@@ -262,12 +292,7 @@ ${imports.map((i) => `  ${i},`).join("\n")}
 export const ${short} = schema(${JSON.stringify(table)}, {
 ${fields.map((f) => `  ${f.source},`).join("\n")}
 });
-export type ${short} = Infer<typeof ${short}>;
-
-export function changeset<D extends ${short} | New<typeof ${short}>>(
-  ${param}: D | Changeset<D>,
-  attrs: unknown,
-): Changeset<D> {
+${signature}
   return pipe(
 ${steps.map((s) => `    ${s},`).join("\n")}
   );
@@ -279,21 +304,29 @@ ${steps.map((s) => `    ${s},`).join("\n")}
  * The schema module of `gen.schema`, as Phoenix writes it: every field but
  * references is cast and required.
  */
-export function schemaSource(spec: SchemaSpec): string {
+export function schemaSource(
+  spec: SchemaSpec,
+  language: Language = "ts",
+): string {
   checkSpec(spec);
-  return renderSchema(spec.name, spec.table, [
-    {
-      source: spec.binaryId
-        ? "id: t.uuid({ primaryKey: true, autogenerate: true })"
-        : "id: t.id()",
-    },
-    ...spec.attrs.map((a) => ({
-      source: `${a.name}: ${a.field}`,
-      ...(!a.reference && { cast: a.name, required: true }),
-      ...(a.unique && { unique: true as const }),
-    })),
-    { source: "...t.timestamps()" },
-  ]);
+  return renderSchema(
+    spec.name,
+    spec.table,
+    [
+      {
+        source: spec.binaryId
+          ? "id: t.uuid({ primaryKey: true, autogenerate: true })"
+          : "id: t.id()",
+      },
+      ...spec.attrs.map((a) => ({
+        source: `${a.name}: ${a.field}`,
+        ...(!a.reference && { cast: a.name, required: true }),
+        ...(a.unique && { unique: true as const }),
+      })),
+      { source: "...t.timestamps()" },
+    ],
+    language,
+  );
 }
 
 const FIELDS: Readonly<Record<string, string>> = {
@@ -342,6 +375,7 @@ function fieldOf(type: ColumnType | undefined): string | undefined {
 export function tableSchemaSource(
   name: string,
   table: TableDescription,
+  language: Language = "ts",
 ): string {
   checkSpec({ name, table: table.name, attrs: [] });
   const fks = new Set(table.foreignKeys.map((f) => f.column));
@@ -402,7 +436,7 @@ export function tableSchemaSource(
       }),
     });
   }
-  return renderSchema(name, table.name, fields);
+  return renderSchema(name, table.name, fields, language);
 }
 
 /** `blog_posts` becomes `BlogPost`: camel-cased, the last word singular. */
@@ -528,6 +562,7 @@ const isReference = (value: unknown): value is Reference =>
 export function kyselyMigrationSource(
   spec: SchemaSpec,
   adapter: Adapter,
+  language: Language = "ts",
 ): string {
   checkSpec(spec);
   const columnType = adapter.columnType?.bind(adapter);
@@ -587,6 +622,16 @@ export function kyselyMigrationSource(
       );
     }
   }
+  const drop = `  await db.schema.dropTable(${JSON.stringify(spec.table)}).execute();`;
+  if (language === "js")
+    return `${usesSql ? 'import { sql } from "kysely";\n\n' : ""}export async function up(db) {
+${up.join("\n")}
+}
+
+export async function down(db) {
+${drop}
+}
+`;
   return `import ${usesSql ? "{ type Kysely, sql }" : "type { Kysely }"} from "kysely";
 
 // biome-ignore lint/suspicious/noExplicitAny: migrations run on any database
@@ -596,7 +641,7 @@ ${up.join("\n")}
 
 // biome-ignore lint/suspicious/noExplicitAny: migrations run on any database
 export async function down(db: Kysely<any>): Promise<void> {
-  await db.schema.dropTable(${JSON.stringify(spec.table)}).execute();
+${drop}
 }
 `;
 }
@@ -616,6 +661,8 @@ export interface GenerateSchemaOptions {
   /** Needed for Kysely migrations. */
   readonly adapter?: Adapter;
   readonly now?: Date;
+  /** The files' language, `"ts"` by default. */
+  readonly language?: Language;
 }
 
 /** Writes the schema file and its migration; returns the files written. */
@@ -623,30 +670,31 @@ export async function generateSchema(
   spec: SchemaSpec,
   options: GenerateSchemaOptions,
 ): Promise<string[]> {
-  const schema = schemaSource(spec);
+  const language = options.language ?? "ts";
+  const schema = schemaSource(spec, language);
   let migration: string | undefined;
   if (options.migration === "ekto") migration = migrationSource(spec);
   else if (options.migration === "kysely") {
     if (options.adapter === undefined)
       throw new Error(
-        "Kysely migrations need the adapter: add an ekto.config.ts",
+        "Kysely migrations need the adapter: add an ekto.config.ts or .js",
       );
-    migration = kyselyMigrationSource(spec, options.adapter);
+    migration = kyselyMigrationSource(spec, options.adapter, language);
   } else if (options.migration !== "none")
     throw new Error(
       `expected the migration format ekto, kysely or none, got ${options.migration}`,
     );
-  const file = join(options.schemasFolder, schemaFile(spec.name));
-  if (existsSync(file)) throw new Error(`${file} already exists`);
+  const file = join(options.schemasFolder, schemaFile(spec.name, language));
+  const existing = existingSchemaFile(file);
+  if (existing !== undefined) throw new Error(`${existing} already exists`);
   const files: string[] = [];
   if (migration !== undefined)
     files.push(
-      await generate(
-        options.migrationsFolder,
-        `create_${spec.table}`,
-        options.now,
-        migration,
-      ),
+      await generate(options.migrationsFolder, `create_${spec.table}`, {
+        ...(options.now && { now: options.now }),
+        contents: migration,
+        language,
+      }),
     );
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, schema, { flag: "wx" });
@@ -659,6 +707,8 @@ export interface GenerateSchemasOptions {
   readonly tables?: ReadonlyMap<string, string | undefined>;
   /** Tables left out when `tables` is not given (e.g. the migrations table). */
   readonly exclude?: readonly string[];
+  /** The files' language, `"ts"` by default. */
+  readonly language?: Language;
 }
 
 /**
@@ -687,18 +737,20 @@ export async function generateSchemas(
       return [table, schema ?? schemaName(name)];
     });
   }
+  const language = options.language ?? "ts";
   const sources = tables.map(
     ([table, name]) =>
       [
-        join(options.schemasFolder, schemaFile(name)),
-        tableSchemaSource(name, table),
+        join(options.schemasFolder, schemaFile(name, language)),
+        tableSchemaSource(name, table, language),
       ] as const,
   );
   const written: string[] = [];
   const skipped: string[] = [];
   for (const [file, source] of sources) {
-    if (existsSync(file)) {
-      skipped.push(file);
+    const existing = existingSchemaFile(file);
+    if (existing !== undefined) {
+      skipped.push(existing);
       continue;
     }
     await mkdir(dirname(file), { recursive: true });
