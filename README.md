@@ -73,6 +73,8 @@ type DB = KyselyDB<[typeof User, typeof Post]>;
 [Changesets](#changesets).
 
 ```ts
+import { z } from "zod";
+
 const cs = pipe(
   cast(User.new(), params, ["email", "name"]),
   validateRequired(["email"]),
