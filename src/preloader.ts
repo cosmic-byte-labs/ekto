@@ -71,6 +71,15 @@ export async function preload(
   return record;
 }
 
+/**
+ * Checks the shape of a preload spec, as `from(Schema, { preload })` does
+ * when the query is built. Its association names are checked when it runs,
+ * as associations may refer to schemas not defined yet.
+ */
+export function checkPreloadSpec(spec: unknown): void {
+  normalize(spec, spec, new Map());
+}
+
 /** Normalizes a preload spec, merging repeated associations (Ecto's `normalize`). */
 function normalize(spec: unknown, original: unknown, into: Preloads): Preloads {
   if (typeof spec === "string") {

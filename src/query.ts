@@ -35,7 +35,9 @@ import {
   type SelectQueryBuilder,
   type SelectQueryNode,
 } from "kysely";
-import { type AnySchema, isSchema } from "./schema.ts";
+import type { PreloadedFields, PreloadSpec } from "./association.ts";
+import { checkPreloadSpec } from "./preloader.ts";
+import { type AnySchema, type Infer, isSchema } from "./schema.ts";
 
 /** The message of running or printing a query without a Repo. */
 const NO_DATABASE =
@@ -109,9 +111,19 @@ declare const schemaBrand: unique symbol;
 
 /**
  * Marks the row type of a `from(Schema)` query, so that `Repo.all` knows
- * its rows are records of the schema. It exists only in types.
+ * its rows are records of the schema, with the associations of `P`
+ * preloaded (`from(Schema, { preload })`). It exists only in types.
  */
-export type SchemaRow<S extends AnySchema> = { readonly [schemaBrand]: S };
+export type SchemaRow<S extends AnySchema, P = never> = {
+  readonly [schemaBrand]: { readonly schema: S; readonly preload: P };
+};
+
+/**
+ * The record of a row marked `SchemaRow<S, P>`: the schema's record with
+ * the associations of `P` loaded.
+ */
+export type SchemaRecord<S extends AnySchema, P> = Infer<S> &
+  PreloadedFields<S, P>;
 
 /** `R` without the `SchemaRow` mark. */
 export type Unmarked<R> =
@@ -131,7 +143,7 @@ export type CheckSelection<Q> =
   Q extends SelectQueryBuilder<infer QDB, any, infer O>
     ? 0 extends 1 & O
       ? unknown
-      : [O] extends [SchemaRow<infer S extends AnySchema>]
+      : [O] extends [SchemaRow<infer S extends AnySchema, unknown>]
         ? NotFields<
             Exclude<
               Extract<keyof O, string>,
@@ -153,13 +165,24 @@ type TableOf<DB, S extends AnySchema> = S["source"] & keyof DB & string;
 
 /**
  * The query `from(Schema)` returns: a Kysely select of the schema's
- * persisted columns from its table, whose rows `Repo.all` loads as records.
+ * persisted columns from its table, whose rows `Repo.all` loads as records,
+ * with the associations of `P` preloaded.
  */
-export type FromQuery<DB, S extends AnySchema> = SelectQueryBuilder<
+export type FromQuery<DB, S extends AnySchema, P = never> = SelectQueryBuilder<
   DB,
   TableOf<DB, S>,
-  Selectable<DB[TableOf<DB, S>]> & SchemaRow<S>
+  Selectable<DB[TableOf<DB, S>]> & SchemaRow<S, P>
 >;
+
+/** The options of `from(Schema, options)`. */
+export interface FromOptions<P> {
+  /**
+   * Associations to preload into the records when a Repo loads them (Ecto's
+   * `preload` in a query), as in `Repo.preload`: one query per association,
+   * after the query, in its transaction.
+   */
+  readonly preload: P;
+}
 
 /**
  * The query `Repo.assoc` returns for the related schema `R`: a `from(R)`
@@ -198,13 +221,25 @@ export interface From<DB> extends SelectFromOf<DB> {
    * given to a Repo, and running or printing the query throws when it
    * selects one, or `*`.
    *
+   * Its associations given as `preload` are preloaded into the records
+   * when `Repo.all`, `one` or `oneOrThrow` loads them, as by `Repo.preload`
+   * (Ecto's `preload` in a query):
+   *
    * ```ts
    * const posts = await repo.all(from(Post).where("title", "like", "Ecto%"));
+   * const withAuthors = await repo.all(from(Post, { preload: "author" }));
    * ```
    */
   <S extends AnySchema & { readonly source: keyof DB & string }>(
     schema: S,
   ): FromQuery<DB, S>;
+  <
+    S extends AnySchema & { readonly source: keyof DB & string },
+    const P extends PreloadSpec<S, DB>,
+  >(
+    schema: S,
+    options: FromOptions<P>,
+  ): FromQuery<DB, S, P>;
 }
 
 /** The query builders of a database, made by `queries<DB>()`. */
@@ -223,10 +258,17 @@ export interface Queries<DB> {
   readonly kysely: Kysely<DB>;
 }
 
-/** The schema and original selections of each `from(Schema)` query, by query id. */
+/**
+ * The schema, original selections and preloads of each `from(Schema)`
+ * query, by query id.
+ */
 const schemaQueries = new WeakMap<
   QueryId,
-  { readonly schema: AnySchema; readonly selections: readonly OperationNode[] }
+  {
+    readonly schema: AnySchema;
+    readonly selections: readonly OperationNode[];
+    readonly preload: unknown;
+  }
 >();
 
 /**
@@ -247,8 +289,8 @@ export function queries<DB>(): Queries<DB> {
   const kysely = new Kysely<DB>({ dialect: unboundDialect });
   // biome-ignore lint/suspicious/noExplicitAny: built for any table
   const db = kysely as Kysely<any>;
-  function from(source: unknown): unknown {
-    if (isSchema(source)) return schemaQuery(source);
+  function from(source: unknown, options?: unknown): unknown {
+    if (isSchema(source)) return schemaQuery(source, fromPreload(options));
     if (
       source === null ||
       (typeof source !== "string" && typeof source !== "object")
@@ -262,6 +304,22 @@ export function queries<DB>(): Queries<DB> {
   return Object.freeze({ from: from as From<DB>, kysely });
 }
 
+/** The preload spec of `from(Schema, options)`, checked. */
+function fromPreload(options: unknown): unknown {
+  if (options === undefined) return undefined;
+  if (typeof options !== "object" || options === null) {
+    throw new TypeError(
+      `from expects options as an object, got: ${String(options)}`,
+    );
+  }
+  for (const key of Object.keys(options)) {
+    if (key !== "preload") throw new TypeError(`unknown from option ${key}`);
+  }
+  const { preload } = options as { preload?: unknown };
+  if (preload !== undefined) checkPreloadSpec(preload);
+  return preload;
+}
+
 /** The Kysely instance without a database of the queries ekto builds itself. */
 // biome-ignore lint/suspicious/noExplicitAny: built for any table
 const unboundDb = new Kysely<any>({ dialect: unboundDialect });
@@ -272,6 +330,7 @@ const unboundDb = new Kysely<any>({ dialect: unboundDialect });
  */
 export function schemaQuery(
   schema: AnySchema,
+  preload?: unknown,
   // biome-ignore lint/suspicious/noExplicitAny: a query of any table
 ): SelectQueryBuilder<any, any, any> {
   const table = schema.source;
@@ -282,6 +341,7 @@ export function schemaQuery(
   schemaQueries.set(compiled.queryId, {
     schema,
     selections: (compiled.query as SelectQueryNode).selections ?? [],
+    preload,
   });
   return builder;
 }
@@ -292,15 +352,25 @@ export function schemaQuery(
  * `select_merge` into a struct, the columns it selects besides must be
  * fields of the schema: a column of a field overrides it and a column of a
  * virtual field sets it. Any other column throws, and so does `*` or
- * `table.*`, whose columns are not known.
+ * `table.*`, whose columns are not known. Its `preload` is given with it;
+ * clearing the selection of a query that preloads throws, as its rows are
+ * no longer records to preload into.
  */
-export function schemaOfQuery(query: UnboundQuery): AnySchema | undefined {
+export function schemaOfQuery(
+  query: UnboundQuery,
+): { readonly schema: AnySchema; readonly preload: unknown } | undefined {
   const remembered = schemaQueries.get(query.queryId);
   if (remembered === undefined) return undefined;
   const selections = (query.query as SelectQueryNode).selections ?? [];
   const kept = remembered.selections.every((s, i) => selections[i] === s);
-  if (!kept) return undefined;
-  const { schema } = remembered;
+  const { schema, preload } = remembered;
+  if (!kept) {
+    if (preload === undefined) return undefined;
+    throw new TypeError(
+      `from(${schema.source}) preloads associations, but its selection was cleared: ` +
+        "only a query of the schema's records can preload",
+    );
+  }
   for (const selection of selections.slice(remembered.selections.length)) {
     const name = selectedName(selection);
     if (name === undefined || !Object.hasOwn(schema.fields, name)) {
@@ -310,7 +380,7 @@ export function schemaOfQuery(query: UnboundQuery): AnySchema | undefined {
       );
     }
   }
-  return schema;
+  return { schema, preload };
 }
 
 /**

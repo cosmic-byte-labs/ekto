@@ -82,6 +82,7 @@ import {
   bindQuery,
   type CheckSelection,
   isUnboundQuery,
+  type SchemaRecord,
   type SchemaRow,
   schemaOfQuery,
   type UnboundQuery,
@@ -269,10 +270,17 @@ type MarkedRowOf<Q> =
 export type ResultOf<Q> =
   IsAny<MarkedRowOf<Q>> extends true
     ? RowOf<Q>
-    : [MarkedRowOf<Q>] extends [SchemaRow<infer S extends AnySchema>]
-      ? Infer<S>
+    : [MarkedRowOf<Q>] extends [SchemaRow<infer S extends AnySchema, infer P>]
+      ? SchemaRecord<S, P>
       : RowOf<Q>;
 type IsAny<T> = 0 extends 1 & T ? true : false;
+
+/** A compiled query, with the schema and preloads of a `from(Schema)` query. */
+type Compiled = {
+  compiled: CompiledQuery;
+  schema?: AnySchema;
+  preload?: unknown;
+};
 
 /**
  * Type check for `Repo.all(Schema, query)`: a typed query must select every
@@ -1570,10 +1578,7 @@ function bind<DB>(
    * Queries of `queries()` are compiled here, with this Repo's Kysely
    * instance, so its dialect and plugins apply.
    */
-  function compile(
-    query: unknown,
-    fn: string,
-  ): { compiled: CompiledQuery; schema?: AnySchema } {
+  function compile(query: unknown, fn: string): Compiled {
     if (query instanceof Sql) {
       const { sql: text, params } = query.compile(adapter.syntax);
       return { compiled: CompiledQuery.raw(text, [...params]) };
@@ -1594,13 +1599,13 @@ function bind<DB>(
     );
   }
 
-  function bound(query: UnboundQuery): {
-    compiled: CompiledQuery;
-    schema?: AnySchema;
-  } {
+  function bound(query: UnboundQuery): Compiled {
     const compiled = bindQuery(query, executor.db);
-    const schema = schemaOfQuery(query);
-    return schema === undefined ? { compiled } : { compiled, schema };
+    const of = schemaOfQuery(query);
+    if (of === undefined) return { compiled };
+    return of.preload === undefined
+      ? { compiled, schema: of.schema }
+      : { compiled, schema: of.schema, preload: of.preload };
   }
 
   /** Compiles a query that must not write (Repo.all/one/query). */
@@ -1608,10 +1613,7 @@ function bind<DB>(
     return compileReadWithSchema(query, fn).compiled;
   }
 
-  function compileReadWithSchema(
-    query: unknown,
-    fn: string,
-  ): { compiled: CompiledQuery; schema?: AnySchema } {
+  function compileReadWithSchema(query: unknown, fn: string): Compiled {
     const result = compile(query, fn);
     const write = writeKinds[result.compiled.query.kind];
     if (write !== undefined) {
@@ -1622,33 +1624,52 @@ function bind<DB>(
     return result;
   }
 
+  /**
+   * Runs a read of `all`, `one` or `oneOrThrow` and loads its rows, with
+   * the preload spec of a `from(Schema, { preload })` query, which the
+   * caller preloads.
+   */
   async function allRows(
     fn: string,
     first: unknown,
     second: unknown,
     hasQuery: boolean,
-  ): Promise<{ rows: readonly object[]; sql: string }> {
+  ): Promise<{ rows: readonly object[]; sql: string; preload?: unknown }> {
     if (!isSchema(first)) {
       if (hasQuery) {
         throw new TypeError(
           `Repo.${fn} expects a schema as its first argument when given a query, got: ${inspect(first)}`,
         );
       }
-      const { compiled, schema } = compileReadWithSchema(first, fn);
+      const { compiled, schema, preload } = compileReadWithSchema(first, fn);
       const { rows } = await executor.execute(compiled, schema?.source);
       return {
         rows: schema ? rows.map((row) => loadSelected(schema, row)) : rows,
         sql: compiled.sql,
+        preload,
       };
     }
-    const compiled = hasQuery
-      ? compileRead(second, fn)
-      : compileQuery(selectSql(first, []), fn);
+    const { compiled, preload } = hasQuery
+      ? compileReadWithSchema(second, fn)
+      : {
+          compiled: compileQuery(selectSql(first, []), fn),
+          preload: undefined,
+        };
     const { rows } = await executor.execute(compiled, first.source);
     return {
       rows: rows.map((row) => loadRow(first, row)),
       sql: compiled.sql,
+      preload,
     };
+  }
+
+  /** Preloads the spec of a `from(Schema, { preload })` query into its records. */
+  async function preloaded(
+    records: readonly object[],
+    spec: unknown,
+  ): Promise<readonly object[]> {
+    if (spec === undefined || records.length === 0) return records;
+    return (await preload(preloadContext, records, spec)) as object[];
   }
 
   /**
@@ -1691,21 +1712,27 @@ function bind<DB>(
   async function all(
     ...args: [unknown] | [unknown, unknown]
   ): Promise<readonly object[]> {
-    return (await allRows("all", args[0], args[1], args.length > 1)).rows;
+    const { rows, preload: spec } = await allRows(
+      "all",
+      args[0],
+      args[1],
+      args.length > 1,
+    );
+    return preloaded(rows, spec);
   }
 
   async function oneRow(
     fn: string,
     args: [unknown] | [unknown, unknown],
   ): Promise<{ row: object | null; sql: string }> {
-    const { rows, sql: text } = await allRows(
-      fn,
-      args[0],
-      args[1],
-      args.length > 1,
-    );
+    const {
+      rows,
+      sql: text,
+      preload: spec,
+    } = await allRows(fn, args[0], args[1], args.length > 1);
     if (rows.length > 1) throw new MultipleResultsError(text, rows.length);
-    return { row: rows[0] ?? null, sql: text };
+    const [row = null] = await preloaded(rows, spec);
+    return { row, sql: text };
   }
 
   async function query(input: unknown): Promise<QueryRows<object>> {

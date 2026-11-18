@@ -73,10 +73,12 @@ export {
   type AssocQuery,
   type CheckSelection,
   type From,
+  type FromOptions,
   type FromQuery,
   type NotFields,
   type Queries,
   queries,
+  type SchemaRecord,
   type SchemaRow,
 } from "./query.ts";
 export {

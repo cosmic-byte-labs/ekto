@@ -127,11 +127,10 @@ repo.toSql(published);
 `hasMany`, `hasOne` and `manyToMany`. See [Preloads](#preloads).
 
 ```ts
-const users = await repo.all(User);
-const withPosts = await repo.preload(users, { posts: "author" });
+const users = await repo.all(from(User, { preload: "posts" }));
+const withPosts = await repo.preload(user, { posts: "author" });
 
-const query = repo.assoc(post, "comments").orderBy("id");
-const comments = await repo.all(query); // Comment[]
+const comments = await repo.all(repo.assoc(post, "comments"));
 ```
 
 **Transactions, and `Multi` for named steps** that see each other's results and commit or roll
@@ -589,9 +588,15 @@ const users = await repo.all(
 
 ## Preloads
 
-Associations are loaded explicitly with `repo.preload`, one query per association:
+Associations are loaded explicitly, one query per association: in a query, with
+`from(Schema, { preload })`, or into records already loaded, with `repo.preload`:
 
 ```ts
+const published = await repo.all(
+  from(Post, { preload: "author" }).where("status", "=", "published"),
+);
+published[0]?.author; // User | null
+
 const user = await repo.getOrThrow(User, 1);
 const withPosts = await repo.preload(user, "posts");
 withPosts.posts; // Post[]
@@ -606,8 +611,10 @@ const users = await repo.preload(await repo.all(User), {
 ```
 
 A preload spec is an association name, an array of specs, or an object whose values are `true`,
-a nested spec, a function refining the query, or `[refine, nested]`. Associations already loaded
-are kept unless `{ force: true }` is passed. `repo.assoc(user, "posts")` returns the query of
+a nested spec, a function refining the query, or `[refine, nested]`. A query's preloads run when
+`repo.all`, `one` or `oneOrThrow` loads its records, after the query and in its transaction, and
+are kept as the query is refined. `repo.preload` keeps associations already loaded unless
+`{ force: true }` is passed. `repo.assoc(user, "posts")` returns the query of
 the associated records, a `from(Post)` query to refine and run:
 `repo.all(repo.assoc(user, "posts").orderBy("id"))` loads posts.
 
@@ -859,6 +866,8 @@ map directly (`Repo.insert` is `repo.insert`, `{:ok, user}` is `{ ok: true, valu
 - Queries are Kysely builders, not `Ecto.Query`. `from p in Post` is `from(Post)`,
   `select_merge` is a `select` on it of the schema's fields, `Repo.to_sql` is `repo.toSql`, and
   `Ecto.assoc` is `repo.assoc`, on the Repo because it converts the keys for its database.
+- `preload: [...]` in a query is `from(Post, { preload: [...] })`, and `Repo.preload` is
+  `repo.preload`. Preloads run one query per association; there are no join preloads yet.
 - Field options are an object: `field :name, :string, default: "x"` is
   `name: t.string({ default: "x" })`.
 - Migrations declare the primary key explicitly; `create(table(...))` adds no `id`.

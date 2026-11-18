@@ -93,33 +93,38 @@ describe("queries", () => {
   test("remembers the schema while its selection is kept", () => {
     const base = from(Post);
     const filtered = base.where("id", "=", 1).orderBy("id");
-    assert.equal(schemaOfQuery(compileUnbound(base)), Post);
-    assert.equal(schemaOfQuery(compileUnbound(filtered)), Post);
+    assert.equal(schemaOfQuery(compileUnbound(base))?.schema, Post);
+    assert.equal(schemaOfQuery(compileUnbound(filtered))?.schema, Post);
     assert.equal(
-      schemaOfQuery(compileUnbound(base.select(ksql<string>`'x'`.as("title")))),
+      schemaOfQuery(compileUnbound(base.select(ksql<string>`'x'`.as("title"))))
+        ?.schema,
       Post,
       "a column of a field overrides it",
     );
     assert.equal(
-      schemaOfQuery(compileUnbound(base.clearSelect().select("id"))),
+      schemaOfQuery(compileUnbound(base.clearSelect().select("id")))?.schema,
       undefined,
       "clearSelect makes it a query of plain rows",
     );
     assert.equal(
-      schemaOfQuery(compileUnbound(base)),
+      schemaOfQuery(compileUnbound(base))?.schema,
       Post,
       "branches of one query do not affect each other",
     );
-    assert.equal(schemaOfQuery(compileUnbound(from("q_posts"))), undefined);
     assert.equal(
-      schemaOfQuery(compileUnbound(kysely.selectFrom("q_posts").selectAll())),
+      schemaOfQuery(compileUnbound(from("q_posts")))?.schema,
+      undefined,
+    );
+    assert.equal(
+      schemaOfQuery(compileUnbound(kysely.selectFrom("q_posts").selectAll()))
+        ?.schema,
       undefined,
     );
   });
 
   test("selects besides only fields of the schema, like Ecto's select_merge", () => {
     const fields = (query: { compile(): unknown }) =>
-      schemaOfQuery(compileUnbound(query as never));
+      schemaOfQuery(compileUnbound(query as never))?.schema;
     assert.equal(fields(from(Post).select("title")), Post);
     assert.equal(
       fields(from(Post).select(ksql<boolean>`true`.as("draft"))),
@@ -423,6 +428,67 @@ function suite(
         NoResultsError,
       );
       await assert.rejects(repo.one(from(Post)), MultipleResultsError);
+    });
+
+    test("from(Schema, { preload }) preloads into the records it loads", async () => {
+      const query = from(User, {
+        preload: { posts: (q) => q.orderBy("views", "desc") },
+      }).orderBy("id");
+      events.length = 0;
+      const users = await repo.all(query);
+      assert.equal(events.length, 2, "one query for users, one for posts");
+      const viaPreload = await repo.preload(await repo.all(User), "posts");
+      type _all = Expect<Equal<typeof users, typeof viaPreload>>;
+      assert.deepEqual(
+        users.map((u) => u.posts.map((p) => p.title)),
+        [["Ecto", "Elixir"], ["Kysely"]],
+      );
+
+      const one = await repo.one(
+        from(User, { preload: "posts" }).where("email", "=", "bob@x"),
+      );
+      type _one = Expect<Equal<typeof one, (typeof viaPreload)[number] | null>>;
+      assert.deepEqual(
+        one?.posts.map((p) => p.title),
+        ["Kysely"],
+      );
+      const none = await repo.oneOrThrow(
+        from(User, { preload: "posts" }).where("email", "=", "ann@x"),
+      );
+      assert.equal(none.posts.length, 2);
+      assert.equal(
+        await repo.one(
+          from(User, { preload: "posts" }).where("email", "=", "none"),
+        ),
+        null,
+      );
+
+      const plain = await repo.all(from(User));
+      assert.equal(
+        "posts" in (plain[0] ?? {}),
+        false,
+        "from(User) is unchanged",
+      );
+    });
+
+    test("from(Schema, { preload }) rejects what cannot preload", async () => {
+      assert.throws(
+        () => from(User, { preload: 1 as never }),
+        /invalid preload 1/,
+      );
+      assert.throws(
+        () => from(User, { nope: true } as never),
+        /unknown from option nope/,
+      );
+      await assert.rejects(
+        // @ts-expect-error: User has no association nope
+        repo.all(from(User, { preload: "nope" })),
+        /does not have association "nope"/,
+      );
+      await assert.rejects(
+        repo.all(from(User, { preload: "posts" }).clearSelect().select("id")),
+        /preloads associations, but its selection was cleared/,
+      );
     });
 
     test("joins keep the schema's columns", async () => {
