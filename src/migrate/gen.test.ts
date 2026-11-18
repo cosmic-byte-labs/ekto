@@ -458,6 +458,48 @@ export default {
       /t\.add\("id", "bigserial", \{ primaryKey: true \}\);/,
     );
   });
+
+  test("language in the configuration sets the files' language", async () => {
+    const folder = join(dir, "language");
+    let config = join(folder, "ekto.config.js");
+    await mkdir(folder);
+    const sqliteUrl = JSON.stringify(
+      pathToFileURL(join(import.meta.dirname, "../sqlite/index.ts")).href,
+    );
+    const write = (language: string) =>
+      writeFile(
+        config,
+        `import { sqlite } from ${sqliteUrl};
+export default {
+  repo: { adapter: sqlite(), database: ":memory:", poolSize: 1 },
+  schemasFolder: ${JSON.stringify(join(folder, "schemas"))},
+  migrationsFolder: ${JSON.stringify(join(folder, "migrations"))},
+  language: ${JSON.stringify(language)},
+};
+`,
+      );
+    await write("js");
+    const gen = async (...args: string[]) => {
+      const lines: string[] = [];
+      await main([...args, "--config", config], (l) => lines.push(l));
+      return lines.map((l) => l.replace(/^.*\//, ""));
+    };
+    const [schema, migration] = await gen("gen.schema", "Org", "orgs");
+    assert.equal(schema, "org.js");
+    assert.match(migration ?? "", /_create_orgs\.js$/);
+    assert.match((await gen("gen.migration", "a"))[0] ?? "", /_a\.js$/);
+    assert.match((await gen("gen.migration", "b", "--ts"))[0] ?? "", /_b\.ts$/);
+    await assert.rejects(
+      gen("gen.migration", "c", "--js", "--ts"),
+      /--js or --ts, not both/,
+    );
+    config = join(folder, "invalid.config.js");
+    await write("javascript");
+    await assert.rejects(
+      gen("gen.migration", "d"),
+      /expected the language "ts" or "js" in the configuration, got "javascript"/,
+    );
+  });
 });
 
 function fromDatabase(

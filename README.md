@@ -740,7 +740,8 @@ ekto gen.schemas              # write schemas for an existing database
 
 `migrate` and `rollback` take `--step N`, `--to VERSION` or `--all`. `gen.migration` creates
 `migrations/<timestamp>_add_posts.ts`, and `gen.schema` creates a schema with a changeset. With
-`--js`, the generators write JavaScript files instead of TypeScript.
+`--js`, or `language: "js"` in the config, the generators write JavaScript files instead of
+TypeScript.
 
 `migrate`, `rollback` and `status` start the Repo with a pool of 2 (`--pool-size N`). On PostgreSQL
 the migration lock holds one connection while another runs the migration, so a pool of one fails.

@@ -56,6 +56,11 @@ export interface EktoConfig {
    * `--binary-id` and `--no-binary-id` override it.
    */
   readonly binaryId?: boolean;
+  /**
+   * The language of the files the generators write, `"ts"` (the default) or
+   * `"js"`; `--js` and `--ts` override it.
+   */
+  readonly language?: Language;
 }
 
 const USAGE = `usage: ekto <command> [options]
@@ -85,7 +90,8 @@ options:
   --no-migration        as --migration none
   --binary-id           gen.schema: UUID primary key and references
   --no-binary-id        gen.schema: bigserial primary key (overrides the configuration)
-  --js                  gen.*: write JavaScript files instead of TypeScript
+  --js                  gen.*: write JavaScript files (or language: "js" in the config)
+  --ts                  gen.*: write TypeScript files (overrides the configuration)
 `;
 
 async function loadConfig(path: string | undefined): Promise<EktoConfig> {
@@ -140,11 +146,23 @@ export async function main(
       "binary-id": { type: "boolean" },
       "no-binary-id": { type: "boolean" },
       js: { type: "boolean" },
+      ts: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
   const [command, ...rest] = positionals;
-  const language: Language = values.js ? "js" : "ts";
+  if (values.js && values.ts)
+    throw new Error("expected --js or --ts, not both");
+  const languageOf = (config: EktoConfig | undefined): Language => {
+    if (values.js) return "js";
+    if (values.ts) return "ts";
+    const language = config?.language ?? "ts";
+    if (language !== "ts" && language !== "js")
+      throw new Error(
+        `expected the language "ts" or "js" in the configuration, got ${JSON.stringify(language)}`,
+      );
+    return language;
+  };
   if (values.help || command === undefined) {
     out(USAGE);
     return command === undefined && !values.help ? 1 : 0;
@@ -174,6 +192,7 @@ export async function main(
     }
     const migrationsFolder =
       values.migrations ?? config?.migrationsFolder ?? "migrations";
+    const language = languageOf(config);
     let files: string[];
     if (command === "gen.migration") {
       if (rest.length !== 1)
@@ -232,7 +251,7 @@ export async function main(
           schemasFolder:
             values.schemas ?? config.schemasFolder ?? "src/schemas",
           ...(tables && { tables }),
-          language,
+          language: languageOf(config),
           exclude: [
             config.migrationSource ?? "schema_migrations",
             "kysely_migration",
