@@ -75,6 +75,17 @@ export const Tag = schema("tags", {
 export type Tag = Infer<typeof Tag>;
 ```
 
+The join table has no schema, so the database type the repo and `queries<DB>()` are created
+with adds its columns to the tables of the schemas:
+
+```ts
+import type { KyselyDB } from "ekto/postgres";
+
+export type DB = KyselyDB<[typeof Post, typeof Tag]> & {
+  posts_tags: { post_id: number; tag_id: number };
+};
+```
+
 Now let's also imagine we want the user to input such tags as a list of words split by comma,
 such as: "elixir, erlang, ecto". Once this data is received in the server, we will break it apart
 into multiple tags and associate them to the post, creating any tag that does not yet exist in the
